@@ -1,0 +1,11 @@
+__pycache__
+model_saves/
+animations/
+logs/
+.venv
+.pytest_cache
+.vscode
+*secret*
+wandb/
+*.sh
+*slurm*

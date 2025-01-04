@@ -1,0 +1,76 @@
+[tool.poetry]
+name = "koopmann"
+version = "0.1.0"
+description = ""
+authors = ["Nishant Aswani <nsa325@nyu.edu>"]
+readme = "README.md"
+package-mode = true
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.13"
+torch = { version = "2.1.0", source = "pytorch" }
+torchvision = { version = "*", source = "pytorch" }
+ipykernel = "^6.29.5"
+fire = "^0.7.0"
+safetensors = "^0.4.5"
+rich = "^13.9.3"
+torchinfo = "^1.8.0"
+jaxtyping = "^0.2.34"
+pydantic = "*"
+torcheval = "^0.0.7"
+pyyaml = "^6.0.2"
+tqdm = "^4.66.5"
+wandb = "^0.18.5"
+matrepr = "^1.0.1"
+einops = "^0.8.0"
+ruff = "^0.7.1"
+plotly = "^5.24.1"
+ipywidgets = "^8.1.5"
+numpy = "^1.25"
+scipy = "^1.14.1"
+panel = "^1.5.5"
+scikit-learn = "^1.6.0"
+jupyter-bokeh = "^4.0.5"
+repsim = {git = "https://github.com/wrongu/repsim"}
+nbformat = "^5.10.4"
+typer = "^0.15.1"
+pyfonts = "^0.0.2"
+pillow = "^11.0.0"
+imageio = {extras = ["ffmpeg"], version = "^2.36.1"}
+
+[[tool.poetry.source]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu121"
+priority = "explicit"
+
+[tool.poetry.group.test.dependencies]  
+pytest-randomly = "^3.15.0"  
+pytest = "^8.3.3"  
+  
+[tool.poetry.group.dev.dependencies]  
+ruff = "*"  
+ipykernel = "^6.29.5"
+matplotlib="*"
+seaborn="*"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+testpaths = [
+    "tests",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+[tool.ruff]
+# Enable Jupyter Notebook support
+extend-include = ["*.ipynb"]
+line-length = 100  # Set the maximum line length
+target-version = "py311"  # Specify the Python version you're targeting
+
+[tool.ruff.lint]
+ignore = ["F722"]
+unfixable = ["F401"]

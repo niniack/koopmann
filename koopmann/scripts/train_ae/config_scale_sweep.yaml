@@ -1,0 +1,62 @@
+entity: nishantaswani
+project: koopmann
+name: scale_sweep
+
+method: grid
+metric:
+  name: train_loss
+  goal: minimize
+
+num_sweeps: 500
+
+parameters:
+  save_name: 
+    value: "lotusroot_model"
+  save_dir: 
+    value: "/scratch/nsa325/koopmann/"
+  seed:
+    value: 21
+  batch_size: 
+    value: 3_000
+  print_freq:
+    value: 100
+  train_data: 
+    parameters:
+      num_samples: 
+        value: 3_000
+      split: 
+        value: train
+      torch_transform:
+        value: null
+      seed:
+        value: 42
+      negative_label:
+        value: false
+      dataset_name: 
+        value: "LotusRootDataset"
+  optim:
+    parameters:
+      num_epochs: 
+        value: 5_000
+      learning_rate: 
+        value: 3e-3  
+      weight_decay:
+        value: 0
+  scale:
+    parameters:
+      model_to_scale: 
+        value: "/home/nsa325/work/koopmann/model_saves/lotusroot_model.safetensors"
+      scale_location:
+        value: 1
+      num_scaled_layers: 
+        values: [10, 25, 50, 100, 150, 200, 250, 500]
+  autoencoder: 
+    parameters:
+      lambda_reconstruction:
+        value: 3
+      lambda_prediction:
+        value: 1
+      ae_dim:
+        values: [20, 50]
+      ae_nonlinearity:
+        value: "leakyrelu"

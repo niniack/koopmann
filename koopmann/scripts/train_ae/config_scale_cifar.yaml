@@ -1,0 +1,31 @@
+train_data: 
+  dataset_name: "CIFAR10Dataset"
+  num_samples: 1
+  split: "train"
+  torch_transform: null
+  seed: 42
+  negative_label: false
+
+optim:
+  num_epochs: 100
+  learning_rate: 1e-2
+  weight_decay: 1e-4
+  betas: [0.9, 0.999]
+
+scale:
+  model_to_scale: "/home/nsa325/work/koopmann/model_saves/resnets/resnet20.th"
+  scale_location: 1
+  num_scaled_layers: 250
+
+autoencoder:
+  ae_dim: 32
+  lambda_reconstruction: 1
+  lambda_prediction: 0
+  lambda_id: 0
+  ae_nonlinearity: "leakyrelu"
+
+batch_size: 4_096
+seed: 21
+save_name: "cifar_model"
+save_dir: "/home/nsa325/work/koopmann/model_saves/scaling/"
+print_freq: 5

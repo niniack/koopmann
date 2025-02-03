@@ -40,7 +40,7 @@ def set_spine_color(ax=None, color="lightgray"):
 def set_equal_aspect(ax=None):
     if ax is None:
         ax = plt.gca()
-    ax.set_aspect("equal", adjustable="datalim")
+    ax.set_aspect("equal")
 
 
 # # Apply equal aspect ratio to all plots by default
@@ -56,7 +56,7 @@ def set_equal_aspect(ax=None):
 plt.rcParams["xtick.labelsize"] = 8
 plt.rcParams["ytick.labelsize"] = 8
 plt.rcParams["legend.fontsize"] = 8
-plt.rcParams["figure.figsize"] = [4, 4]
+plt.rcParams["figure.figsize"] = [6, 6]
 
 # Font settings
 # plt.rcParams["font.size"] = 10  # Set default font size

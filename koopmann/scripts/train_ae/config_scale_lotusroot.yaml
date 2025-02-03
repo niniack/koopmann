@@ -8,7 +8,7 @@ train_data:
 
 optim:
   num_epochs: 5_000
-  learning_rate: 3e-3
+  learning_rate: 8e-3
   weight_decay: 1e-4
   betas: [0.9, 0.999]
 
@@ -19,11 +19,12 @@ scale:
 
 autoencoder:
   ae_dim: 20
-  lambda_reconstruction: 3
+  lambda_reconstruction: 5
   lambda_prediction: 1
+  lambda_id: 1
   ae_nonlinearity: "leakyrelu"
 
-batch_size: 1_000
+batch_size: 5_000
 seed: 21
 save_name: "lotusroot_model"
 save_dir: "/home/nsa325/work/koopmann/model_saves/scaling/"

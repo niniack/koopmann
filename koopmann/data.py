@@ -48,6 +48,7 @@ def create_data_loader(
         dataset,  # type: ignore
         batch_size=batch_size,
         shuffle=shuffle,
+        num_workers=8,
     )
     return loader
 

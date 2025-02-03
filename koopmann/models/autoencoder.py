@@ -1,4 +1,8 @@
-__all__ = ["Autoencoder", "ExponentialKoopmanAutencoder"]
+__all__ = [
+    "Autoencoder",
+    "ExponentialKoopmanAutencoder",
+    "MatrixExponential",
+]
 
 import warnings
 from ast import literal_eval
@@ -15,7 +19,12 @@ from torch import Tensor
 
 from koopmann.models.base import BaseTorchModel
 from koopmann.models.layers import LinearLayer
-from koopmann.models.utils import StringtoClassNonlinearity, get_device, parse_safetensors_metadata
+from koopmann.models.utils import (
+    StringtoClassNonlinearity,
+    eigeninit,
+    get_device,
+    parse_safetensors_metadata,
+)
 
 AutoencoderResult = namedtuple("AutoencoderResult", "predictions reconstruction")
 
@@ -33,10 +42,13 @@ class Autoencoder(BaseTorchModel):
         nonlinearity: str = "leakyrelu",
     ):
         super().__init__()
+
         if latent_dimension <= input_dimension:
             warnings.warn(
-                f"The latent dimension {latent_dimension} should probably be larger than the input dimension {input_dimension}!"
+                f"The latent dimension {latent_dimension} should probably be "
+                f"larger than the input dimension {input_dimension}!"
             )
+
         self.input_dimension = input_dimension
         self.latent_dimension = latent_dimension
 
@@ -81,7 +93,7 @@ class Autoencoder(BaseTorchModel):
             batchnorm=False,
             hook=False,
         )
-        eigeninit(self._koopman_matrix.linear_layer.weight, theta=0.7)
+        eigeninit(self._koopman_matrix.linear_layer.weight, theta=0.3)
 
         ################## DECODER #################
         self._decoder = nn.Sequential()
@@ -121,32 +133,61 @@ class Autoencoder(BaseTorchModel):
         """Returns the autoencoder modules in a sequential container."""
         return nn.Sequential(self._koopman_matrix, *(list(self._encoder) + list(self._decoder)))
 
-    def forward(self, x: Float[Tensor, "batch features"], k: Int = 0) -> AutoencoderResult:
-        """Forward."""
+    def _encode(self, x):
         # Pre-encoder bias
         x_bar = x - self.decoder[-1].linear_layer.bias
+        return self.encoder(x_bar)
+
+    def _decode(self, x):
+        return self.decoder(x)
+
+    def forward(
+        self,
+        x: Float[Tensor, "batch features"],
+        k: Int = 0,
+        intermediate=False,
+    ) -> AutoencoderResult:
+        """Forward."""
 
         # Encode
-        phi_x = self.encoder(x_bar)
+        phi_x = self._encode(x)
 
         # Reconstruct
         x_recons = self.decoder(phi_x)
 
-        # Advance latent variable k times
-        prediction = [phi_x]
-        for i in range(1, k + 1):
-            prev_pred = prediction[i - 1]
-            prediction.append(self.koopman_matrix(prev_pred))
+        ##########################################
+        # If you like slow code, you'll enjoy this!
+        # It stores all intermediate predictions
+        # but, we never actually use them, so off with its head.
+        ##########################################
+        if intermediate:
+            # Advance latent variable k times
+            prediction = [phi_x]
+            for i in range(1, k + 1):
+                prev_pred = prediction[i - 1]
+                prediction.append(self.koopman_matrix(prev_pred))
 
-        # Batched decoding
-        # Shape: [steps, batch, latent_dim]
-        stacked_predictions = torch.stack(prediction, dim=0)
-        steps, batch_size, latent_dim = stacked_predictions.size()
-        # Shape: [steps * batch, feature_dim]
-        reshaped_predictions = stacked_predictions.view(-1, latent_dim)
-        decoded = self.decoder(reshaped_predictions)
-        # Shape: [steps, batch, latent_dim]
-        x_k = decoded.view(steps, batch_size, -1)
+            # Batched decoding
+            # Shape: [steps, batch, latent_dim]
+            stacked_predictions = torch.stack(prediction, dim=0)
+            steps, batch_size, latent_dim = stacked_predictions.size()
+            # Shape: [steps * batch, feature_dim]
+            reshaped_predictions = stacked_predictions.view(-1, latent_dim)
+            decoded = self.decoder(reshaped_predictions)
+            # Shape: [steps, batch, latent_dim]
+            x_k = decoded.view(steps, batch_size, -1)
+
+        ##########################################
+        # Faster way, but no intermediate stores
+        ##########################################
+        else:
+            K_weight = self.koopman_matrix.linear_layer.weight
+            K_effective_weight = torch.linalg.matrix_power(K_weight, k)
+            x_k = phi_x @ K_effective_weight.T
+            x_k = self._decode(x_k)
+
+            # For compatibility
+            x_k = x_k.unsqueeze(0)
 
         return AutoencoderResult(x_k, x_recons)
 
@@ -200,12 +241,25 @@ class Autoencoder(BaseTorchModel):
 
 
 class MatrixExponential(nn.Module):
-    def __init__(self, k):
+    def __init__(self, k, dim):
         super().__init__()
         self.k = k  # Number of steps
+        self.dim = dim
 
     def forward(self, X):
         return torch.matrix_exp(X / self.k)  # Scale M by 1/k
+
+    # # Custom initialization function using matrix logarithm
+    # def right_inverse(self, X):
+    #     # Define a target matrix (e.g., an orthogonal matrix or one with specific eigenvalues)
+    #     dummy_layer = nn.Linear(in_features=self.dim, out_features=self.dim)
+    #     eigeninit(dummy_layer.weight, theta=1.0)
+    #     target_matrix = dummy_layer.weight
+
+    #     # Compute the matrix logarithm of the target matrix
+    #     log_matrix = self.k * logm(target_matrix)
+
+    #     return torch.Tensor(log_matrix)
 
 
 class ExponentialKoopmanAutencoder(Autoencoder):
@@ -230,7 +284,7 @@ class ExponentialKoopmanAutencoder(Autoencoder):
         self.steps = k
 
         parametrize.register_parametrization(
-            self.koopman_matrix.linear_layer, "weight", MatrixExponential(k=k)
+            self.koopman_matrix.linear_layer, "weight", MatrixExponential(k=k, dim=latent_dimension)
         )
 
     @classmethod
@@ -271,45 +325,3 @@ class ExponentialKoopmanAutencoder(Autoencoder):
             metadata[key] = str(value)
 
         save_model(self, Path(file_path), metadata=metadata)
-
-
-def eigeninit(weight: torch.Tensor, theta: float = 0.7) -> None:
-    """
-    Initialization for Koopman matrix weights.
-
-    The magnitudes of the eigenvalues are set to be between 0 and 1,
-    with theta determining the probability of 1.
-    Directly modifies the input tensor `weight` in-place.
-    """
-    # Eigendecomposition
-    eigenvalues, eigenvectors = torch.linalg.eig(weight)
-
-    # Represent eigenvalues in polar coordinates
-    polar_mags = torch.abs(eigenvalues)
-    polar_phase = torch.angle(eigenvalues)
-
-    # Sample with slab-spike distribution
-    num_unique = len(torch.unique(polar_mags, sorted=False))
-    bernoulli_trials = torch.distributions.Bernoulli(theta).sample([num_unique])
-    uniform_trials = torch.distributions.Uniform(0, 1).sample([num_unique]) * (1 - bernoulli_trials)
-    result_trials = bernoulli_trials + uniform_trials
-
-    # Sample new magnitudes, while preserving conjugate pairs!
-    new_polar_mags = torch.empty_like(polar_mags)
-    new_polar_mags[0] = result_trials[0]
-    j = 1
-    for i in range(1, new_polar_mags.size(0)):
-        if torch.isclose(polar_mags[i], polar_mags[i - 1]):
-            new_polar_mags[i] = new_polar_mags[i - 1]
-        else:
-            new_polar_mags[i] = result_trials[j]
-            j += 1
-
-    # Rebuild eigenvalues with new magnitudes
-    new_eigenvalues = torch.polar(new_polar_mags, polar_phase)
-
-    # Construct new weight matrix in-place
-    with torch.no_grad():  # Precaution
-        weight.copy_(
-            torch.real(eigenvectors @ torch.diag(new_eigenvalues) @ torch.linalg.inv(eigenvectors))
-        )

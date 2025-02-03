@@ -2,13 +2,13 @@ import os
 import pdb
 import sys
 from collections import OrderedDict
+from functools import reduce
 from pathlib import Path
 from typing import Literal, Optional
 
 import fire
 import torch
 import torch.nn.functional as F
-import wandb
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -22,6 +22,7 @@ from torch import linalg, nn, optim
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, ReduceLROnPlateau
 from torch.utils.data import DataLoader
 
+import wandb
 from koopmann.data import (
     DatasetConfig,
     create_data_loader,
@@ -57,6 +58,7 @@ class AutoencoderConfig(BaseModel):
     ae_dim: PositiveInt
     lambda_reconstruction: NonNegativeFloat
     lambda_prediction: NonNegativeFloat
+    lambda_id: NonNegativeFloat
     ae_nonlinearity: Optional[str] = None
 
 
@@ -85,7 +87,7 @@ def pad_act(x, target_size):
 
 
 ########################## LOSSES ##########################
-def compute_recons_loss(act_dict, autoencoder):
+def compute_recons_loss(act_dict, autoencoder, k):
     padded_acts = []
     masks = []
     ae_input_size = autoencoder.encoder[0].in_features
@@ -100,26 +102,41 @@ def compute_recons_loss(act_dict, autoencoder):
         mask[:curr_size] = 1
         masks.append(mask)
 
+    # Latent act for each padded act
+    latent_acts = [autoencoder._encode(padded_act) for padded_act in padded_acts]
+
     # Stack lists
     padded_acts = torch.stack(padded_acts, dim=1)  # shape: batch, layers, neurons
     masks = torch.stack(masks, dim=0)  # shape: layers, neurons
+    latent_acts = torch.stack(latent_acts, dim=1)  # shape: batch, layers, neurons
 
-    # Total variance, used as a denominator for scaling the reconstruction loss
-    masked_centered_acts = padded_acts - padded_acts.mean(dim=0) * masks.unsqueeze(dim=0)
-    total_variance = masked_centered_acts.pow(2).sum()
-
+    #### STATE SPACE
     # Reconstruction with AE
-    recons_acts = [autoencoder(x=act, k=0).reconstruction for act in padded_acts.unbind(dim=1)]
+    recons_acts = [
+        autoencoder(padded_act, k=0).reconstruction for padded_act in padded_acts.unbind(dim=1)
+    ]
     recons_acts = torch.stack(recons_acts, dim=1)
-
-    # Reconstruction error
     masked_diff = (padded_acts - recons_acts) * masks.unsqueeze(dim=0)
     recons_error = (masked_diff).pow(2).sum()
+
+    # Total variance for padded acts in state space
+    masked_centered_acts = padded_acts - padded_acts.mean(dim=0) * masks.unsqueeze(dim=0)
+    total_variance_state_space = masked_centered_acts.pow(2).sum()
+
+    #### LATENT SPACE
+    embedded_act = latent_acts[:, 0, :] @ linalg.matrix_power(
+        autoencoder.koopman_matrix.linear_layer.weight.T.detach(), k
+    )
+    latent_error = (embedded_act - latent_acts[:, -1, :]).pow(2).sum()
+
+    # Total variance for latent act
+    latent_last_centered_acts = latent_acts[:, -1, :] - latent_acts[:, -1, :].mean(dim=0)
+    total_variance_latent_space = latent_last_centered_acts.pow(2).sum()
 
     # Error is scaled with total_variance
     # Note that we didn't bother with dividing either value
     # by the numel because it would cancel out!
-    return recons_error / total_variance
+    return (recons_error / total_variance_state_space), (latent_error / total_variance_latent_space)
 
 
 def compute_k_prediction_loss(act_dict, autoencoder, k):
@@ -138,6 +155,47 @@ def compute_k_prediction_loss(act_dict, autoencoder, k):
     return recons_error / total_variance
 
 
+def compute_identity_loss(act_dict, autoencoder, k):
+    """Not actually identity loss, just calling it this for now, for easy integration."""
+    return torch.tensor(0.0)
+
+
+# def compute_identity_loss(autoencoder, epsilon=1e-6, eig_threshold=0.5):
+#     # Extract the dynamics matrix
+#     dynamics_matrix = autoencoder.koopman_matrix.linear_layer.weight
+
+#     # Compute the eigenvalues of the dynamics matrix
+#     eigenvalues = torch.linalg.eigvals(dynamics_matrix)
+
+#     # Get the modulus of the eigenvalues
+#     moduli = torch.abs(eigenvalues)
+
+#     # Determine stable and dynamic eigenvalues
+#     stable_indices = torch.isclose(
+#         moduli, torch.tensor(1.0, device=moduli.device), atol=0.1
+#     )  # Close to 1.0
+#     dynamic_indices = ~stable_indices  # Everything else is dynamic
+
+#     # Compute L_stat: Penalize stable eigenvalues from 1.0
+#     if stable_indices.any():
+#         stable_moduli = moduli[stable_indices]
+#         l_stat = torch.mean((stable_moduli - 1.0) ** 2)
+#     else:
+#         l_stat = torch.tensor(0.0, device=dynamics_matrix.device)
+
+#     # Compute L_dyn: Penalize dynamic eigenvalues crossing the threshold
+#     if dynamic_indices.any():
+#         dynamic_moduli = moduli[dynamic_indices]
+#         l_dyn = torch.mean(torch.relu(dynamic_moduli - eig_threshold))
+#     else:
+#         l_dyn = torch.tensor(0.0, device=dynamics_matrix.device)
+
+#     # Combined eigenvalue loss (L_eig = L_stat + L_dyn)
+#     l_eig = l_stat + l_dyn
+
+#     return l_eig
+
+
 ########################## TRAIN LOOP ##########################
 def train_one_epoch(
     model: nn.Module,
@@ -151,6 +209,7 @@ def train_one_epoch(
     loss_epoch = 0
     ae_recons_loss_epoch = 0
     ae_prediction_loss_epoch = 0
+    ae_id_loss_epoch = 0
 
     for input, label in train_loader:
         # Unwrap batch
@@ -178,9 +237,10 @@ def train_one_epoch(
         first_last_acts = {first_key: first_value, last_key: last_value}
 
         # Compute autoencoder losses
-        ae_recons_loss = compute_recons_loss(
+        ae_recons_loss, ae_id_loss = compute_recons_loss(
             act_dict=all_acts,
             autoencoder=autoencoder,
+            k=config.scale.num_scaled_layers,
         )
         ae_pred_loss = compute_k_prediction_loss(
             act_dict=first_last_acts,
@@ -192,6 +252,7 @@ def train_one_epoch(
         loss = (
             config.autoencoder.lambda_reconstruction * ae_recons_loss
             + config.autoencoder.lambda_prediction * ae_pred_loss
+            + config.autoencoder.lambda_id * ae_id_loss
         )
 
         loss.backward()
@@ -201,17 +262,20 @@ def train_one_epoch(
         loss_epoch += loss.item()
         ae_recons_loss_epoch += ae_recons_loss.item()
         ae_prediction_loss_epoch += ae_pred_loss.item()
+        ae_id_loss_epoch += ae_id_loss.item()
 
     # Average losses over all batches
     epoch_loss = loss_epoch / len(train_loader)
     avg_recons_loss = ae_recons_loss_epoch / len(train_loader)
     avg_prediction_loss = ae_prediction_loss_epoch / len(train_loader)
+    avg_id_loss = ae_id_loss_epoch / len(train_loader)
 
     # Return all metrics as a dictionary
     return {
         "epoch_loss": epoch_loss,
         "recons_loss": avg_recons_loss,
         "prediction_loss": avg_prediction_loss,
+        "id_loss": avg_id_loss,
     }
 
 
@@ -256,11 +320,13 @@ def eval_autoencoder(config: Config, model: nn.Module, autoencoder: nn.Module) -
     test_loader = create_data_loader(dataset, batch_size=config.batch_size, global_seed=config.seed)
 
     # Compute mean reconstruction error
+    device = get_device()
     k = config.scale.num_scaled_layers
-    recons_error = torch.tensor(0.0)
-    prediction_error = torch.tensor(0.0)
+    recons_error = 0.0
+    prediction_error = 0.0
     for batch in test_loader:
         input, label = batch
+        input, label = input.to(device), label.to(device).squeeze()
         _ = model(input)
 
         gt_acts = model.get_fwd_activations()
@@ -272,20 +338,20 @@ def eval_autoencoder(config: Config, model: nn.Module, autoencoder: nn.Module) -
         recons = autoencoder(
             x=pad_act(first_act, target_size=autoencoder.encoder[0].in_features), k=0
         ).reconstruction
-        recons_error += F.mse_loss(first_act, recons)
+        recons_error += F.mse_loss(first_act.to(device), recons.to(device)).item()
 
         # Last layer
         recons = autoencoder(
             x=pad_act(last_act, target_size=autoencoder.encoder[0].in_features), k=0
         ).reconstruction[:, : last_act.size(-1)]
-        recons_error += F.mse_loss(last_act, recons)
+        recons_error += F.mse_loss(last_act.to(device), recons.to(device)).item()
 
         all_pred = autoencoder(
             x=pad_act(first_act, target_size=autoencoder.encoder[0].in_features),
             k=k,
         ).predictions
-        pred = all_pred[k, :, : last_act.size(-1)]
-        prediction_error += F.mse_loss(last_act, pred)
+        pred = all_pred[-1, :, : last_act.size(-1)]
+        prediction_error += F.mse_loss(last_act.to(device), pred.to(device)).item()
 
     recons_error = recons_error / len(test_loader)
     prediction_error = prediction_error / len(test_loader)
@@ -295,8 +361,12 @@ def eval_autoencoder(config: Config, model: nn.Module, autoencoder: nn.Module) -
         eigenvalues, _ = linalg.eig(autoencoder.koopman_matrix.linear_layer.weight.detach())
 
     spectral_radius = torch.max(torch.abs(eigenvalues))
-    fig, ax = plot_eigenvalues(eigenvalues)
-
+    fig, axes = plot_eigenvalues(
+        eigenvalues_dict={(k, autoencoder.latent_dimension): eigenvalues},
+        tile_size=4,
+        num_rows=1,
+        num_cols=1,
+    )
     # Log
     wandb.log(
         {
@@ -349,6 +419,11 @@ def main(config_path_or_obj: Optional[Path | str | Config] = None):
         weight_decay=config.optim.weight_decay,
         betas=(0.9, 0.999) if not config.optim.betas else tuple(config.optim.betas),
     )
+    # optimizer = optim.SGD(
+    #     params=list(autoencoder.parameters()),
+    #     lr=config.optim.learning_rate,
+    #     weight_decay=config.optim.weight_decay,
+    # )
 
     # Loop over epochs
     for epoch in range(config.optim.num_epochs):
@@ -372,6 +447,7 @@ def main(config_path_or_obj: Optional[Path | str | Config] = None):
                     "train_loss": losses["epoch_loss"],
                     "recons_loss": losses["recons_loss"],
                     "prediction_loss": losses["prediction_loss"],
+                    "id_loss": losses["id_loss"],
                 }
             )
 
@@ -382,6 +458,7 @@ def main(config_path_or_obj: Optional[Path | str | Config] = None):
                 f"Train Loss: {losses['epoch_loss']:.4f}, "
                 f"Reconstruction Loss: {losses['recons_loss']:.4f}, "
                 f"Prediction Loss: {losses['prediction_loss']:.4f} "
+                f"Identity Loss: {losses['id_loss']:.4f} "
             )
 
     eval_autoencoder(config, original_model, autoencoder)

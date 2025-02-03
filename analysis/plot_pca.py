@@ -93,7 +93,6 @@ def get_activations(model, autoencoder, batch, k_steps, device):
     embedded_act_dict = OrderedDict(zip(new_keys, embedded_act))
 
     return decoded_act_dict, embedded_act_dict
-    # return decoded_act_dict, None
 
 
 def animate(state_dict, observable_dict, labels, plot_metadata):

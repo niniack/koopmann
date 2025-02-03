@@ -1,0 +1,62 @@
+entity: nishantaswani
+project: koopmann
+name: scale_sweep
+
+method: grid
+metric:
+  name: train_loss
+  goal: minimize
+
+num_sweeps: 500
+
+parameters:
+  save_name: 
+    value: "mnist_model"
+  save_dir: 
+    value: "/scratch/nsa325/koopmann/"
+  seed:
+    value: 21
+  batch_size: 
+    value: 60_000
+  print_freq:
+    value: 5
+  train_data: 
+    parameters:
+      num_samples: 
+        value: 60_000
+      split: 
+        value: train
+      torch_transform:
+        value: null
+      seed:
+        value: 42
+      negative_label:
+        value: false
+      dataset_name: 
+        value: "MNISTDataset"
+  optim:
+    parameters:
+      num_epochs: 
+        value: 100
+      learning_rate: 
+        value: 5e-3  
+      weight_decay:
+        value: 1e-4
+  scale:
+    parameters:
+      model_to_scale: 
+        value: "/home/nsa325/work/koopmann/model_saves/mnist_model.safetensors"
+      scale_location:
+        value: 1
+      num_scaled_layers: 
+        values: [10, 25, 50, 100, 250, 500]
+  autoencoder: 
+    parameters:
+      lambda_reconstruction:
+        values: [5,1]
+      lambda_prediction:
+        values: [2,5]
+      ae_dim:
+        values: [128, 256, 512]
+      ae_nonlinearity:
+        value: "leakyrelu"

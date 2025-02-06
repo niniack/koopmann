@@ -9,7 +9,6 @@ from typing import Literal, Optional
 import fire
 import torch
 import torch.nn.functional as F
-import wandb
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -23,6 +22,7 @@ from torch import linalg, nn, optim
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, ReduceLROnPlateau
 from torch.utils.data import DataLoader
 
+import wandb
 from koopmann.data import (
     DatasetConfig,
     create_data_loader,
@@ -49,7 +49,7 @@ class OptimConfig(BaseModel):
 class ScaleConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     model_to_scale: str
-    scale_location: PositiveInt
+    scale_location: NonNegativeInt
     num_scaled_layers: PositiveInt
 
 
@@ -231,6 +231,14 @@ def train_one_epoch(
             _ = model.forward(input)
 
         all_acts = model.get_fwd_activations()
+
+        # Add the inputs as part of the `all_acts` dict. Haram!
+        # But that requires shifting each key down one
+        temp_all_acts = OrderedDict()
+        temp_all_acts[0] = input.flatten(start_dim=1)
+        for key, val in all_acts.items():
+            temp_all_acts[key + 1] = val
+        all_acts = temp_all_acts
 
         # NOTE: Does not include scaled activations!
         # Get first and last elements without modifying the dict
@@ -458,7 +466,7 @@ def main(config_path_or_obj: Optional[Path | str | Config] = None):
                 f"Identity Loss: {losses['id_loss']:.4f} "
             )
 
-    eval_autoencoder(config, original_model, autoencoder)
+    # eval_autoencoder(config, original_model, autoencoder)
 
     # Save model
     if config.save_dir:

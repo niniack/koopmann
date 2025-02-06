@@ -1,0 +1,22 @@
+model: 
+    out_features: 2
+    hidden_neurons: [64, 32, 16]
+
+optim: 
+    weight_decay: 1e-2
+    num_epochs: 30
+    learning_rate: 1e-2
+
+train_data: 
+    dataset_name: "BinaryMNISTDataset"
+    num_samples: 60_000
+    split: "train"
+    torch_transform: null
+    seed: 42
+    negative_label: false
+
+seed: 0
+batch_size: 4_096
+print_freq: 1
+save_name: "mnist_model"
+save_dir: "/home/nsa325/work/koopmann/model_saves/"

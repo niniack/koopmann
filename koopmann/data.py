@@ -5,14 +5,16 @@ __all__ = [
 ]
 
 import sys
-from typing import Callable, Literal
+from typing import Any, Callable, Literal, Tuple
 
 import numpy as np
 import torch
 from jaxtyping import Bool, Float, Int
+from PIL import Image
 from pydantic import BaseModel, ConfigDict
 from torch.utils.data import DataLoader, Dataset
 from torchvision import datasets, transforms
+from torchvision.transforms import Lambda, ToTensor
 
 
 class DatasetConfig(BaseModel):
@@ -25,6 +27,7 @@ class DatasetConfig(BaseModel):
         "SunflowerDataset",
         "TorusDataset",
         "MNISTDataset",
+        "BinaryMNISTDataset",
         "CIFAR10Dataset",
         "FashionMNISTDataset",
     ]
@@ -368,11 +371,19 @@ class MNISTDataset(datasets.MNIST):
         config=None,
         seed=42,
         transform=None,  # Torch transforms, uses default MNIST transform if None
+        target_transform=None,
         root="/scratch/nsa325/datasets/",  # Dataset location
     ):
         self.transform = transform or self.default_transform
+        self.target_transform = target_transform
         train = True if config.split == "train" else False
-        super().__init__(root=root, train=train, download=True, transform=self.transform)
+        super().__init__(
+            root=root,
+            train=train,
+            download=True,
+            transform=self.transform,
+            target_transform=self.target_transform,
+        )
         self.seed = seed
         self.config = config
         self.in_features = 784
@@ -380,6 +391,35 @@ class MNISTDataset(datasets.MNIST):
 
     def name(self):
         return "MNISTDataset"
+
+
+class BinaryMNISTDataset(MNISTDataset):
+    """
+    Binarizing wrapper around the MNIST dataset with default configurations.
+
+    This converts the problem from a 10-way to a 2-way classification problem.
+    """
+
+    def __init__(
+        self,
+        binarize_target=0,
+        config=None,
+        seed=42,
+        transform=None,  # Torch transforms, uses default MNIST transform if None
+        root="/scratch/nsa325/datasets/",  # Dataset location
+    ):
+        target_transform = Lambda(lambda y: 0 if y == binarize_target else 1)
+
+        super().__init__(
+            config=config,
+            seed=seed,
+            transform=transform,
+            target_transform=target_transform,
+            root=root,
+        )
+
+    def name(self):
+        return "BinaryMNISTDataset"
 
 
 class FashionMNISTDataset(datasets.FashionMNIST):

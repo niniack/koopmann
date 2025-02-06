@@ -3,6 +3,33 @@ import torch
 from koopmann.data import DatasetConfig, get_dataset_class
 
 
+def test_mnist_dataset():
+    dataset_config = DatasetConfig(
+        dataset_name="MNISTDataset", num_samples=-1, split="train", seed=42
+    )
+    DatasetClass = get_dataset_class(name=dataset_config.dataset_name)
+    dataset = DatasetClass(config=dataset_config)
+    assert len(dataset) == 60_000
+    assert dataset.in_features == 784
+
+    label = dataset[0][1]
+    assert label >= 0 and label <= 9
+
+
+def test_binary_mnist_dataset():
+    dataset_config = DatasetConfig(
+        dataset_name="BinaryMNISTDataset", num_samples=-1, split="train", seed=42
+    )
+    DatasetClass = get_dataset_class(name=dataset_config.dataset_name)
+    dataset = DatasetClass(config=dataset_config, binarize_target=0)
+
+    assert len(dataset) == 60_000
+    assert dataset.in_features == 784
+
+    label = dataset[0][1]
+    assert label >= 0 and label <= 1
+
+
 def test_lotusroot_dataset():
     dataset_config = DatasetConfig(
         dataset_name="LotusRootDataset", num_samples=50, split="train", seed=42

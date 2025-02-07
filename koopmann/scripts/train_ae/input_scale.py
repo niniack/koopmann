@@ -1,7 +1,7 @@
 import os
 import pdb
 import sys
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from functools import reduce
 from pathlib import Path
 from typing import Literal, Optional
@@ -53,6 +53,7 @@ class ScaleConfig(BaseModel):
     num_scaled_layers: PositiveInt
 
 
+# Autoencoder configuration
 class AutoencoderConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     ae_dim: PositiveInt
@@ -84,6 +85,80 @@ def pad_act(x, target_size):
         x = F.pad(x, (0, pad_size), mode="constant", value=0)
 
     return x
+
+
+def gather_layer_stats(model, dataloader, device):
+    """
+    Runs forward passes on the entire `dataloader` and accumulates
+    sum, sum-of-squares, and count for each layer's activation.
+
+    Returns:
+        means: dict {layer_index: torch.Tensor of shape [layer_dim]}
+        stds:  dict {layer_index: torch.Tensor of shape [layer_dim]}
+    """
+    # We'll store running sums, sums-of-squares, and counts
+    sums = defaultdict(lambda: 0.0)
+    sums_sq = defaultdict(lambda: 0.0)
+    counts = defaultdict(lambda: 0)
+
+    model.hook_model()
+
+    with torch.no_grad():
+        for X, _ in dataloader:
+            X = X.to(device)
+            # Flatten if needed (MNIST case)
+            X = X.flatten(start_dim=1)
+
+            # Forward pass
+            _ = model(X)
+            # Collect the intermediate activations
+            acts = model.get_fwd_activations()
+
+            # If you also want "input" as layer 0, handle that separately
+            # (or treat it consistently below)
+            layer_id = 0
+            # We'll treat the input as layer_id=0
+            # Then subsequent hooks as 1,2,...
+
+            # Input stats (optional if you want them normalized too)
+            input_batch_size, input_dim = X.shape
+            sums[0] += X.sum(dim=0)
+            sums_sq[0] += (X * X).sum(dim=0)
+            counts[0] += input_batch_size
+
+            # Now the hooked activations
+            for k, val in acts.items():
+                # val has shape [batch_size, layer_dim]
+                # Let's shift it by +1 if you want input as "layer 0"
+                layer_id = k + 1
+                bsz, dim = val.shape
+                sums[layer_id] += val.sum(dim=0)
+                sums_sq[layer_id] += (val * val).sum(dim=0)
+                counts[layer_id] += bsz
+
+    # Now compute mean and std for each layer
+    means = {}
+    stds = {}
+    for layer_id in sorted(sums.keys()):
+        # sums[layer_id] is shape [layer_dim]
+        # sums_sq[layer_id] is shape [layer_dim]
+        # counts[layer_id] is integer
+        layer_count = counts[layer_id]
+        layer_sum = sums[layer_id]
+        layer_sum_sq = sums_sq[layer_id]
+
+        # Mean
+        mean = layer_sum / layer_count
+
+        # Variance = E[x^2] - E[x]^2
+        # E[x^2] = layer_sum_sq / layer_count
+        var = (layer_sum_sq / layer_count) - mean**2
+        std = torch.sqrt(torch.clamp(var, min=1e-9))  # avoid tiny/negative
+
+        means[layer_id] = mean
+        stds[layer_id] = std
+
+    return means, stds
 
 
 ########################## LOSSES ##########################
@@ -206,6 +281,8 @@ def train_one_epoch(
     device: torch.device,
     optimizer: torch.optim.Optimizer,
     config: Config,
+    means: dict,
+    stds: dict,
 ) -> dict:
     # Per epoch losses
     loss_epoch = 0
@@ -223,7 +300,6 @@ def train_one_epoch(
 
         # Attach model hooks
         model.hook_model()
-
         optimizer.zero_grad()
 
         # Raw forward pass
@@ -407,13 +483,24 @@ def main(config_path_or_obj: Optional[Path | str | Config] = None):
     original_model, _ = MLP.load_model(file_path=config.scale.model_to_scale)
     original_model.to(device).eval()
 
+    means, stds = gather_layer_stats(original_model, train_loader, device)
+
+    pdb.set_trace()
+
     # Build autoencoder
-    autoencoder = ExponentialKoopmanAutencoder(
+    autoencoder = Autoencoder(
         k=config.scale.num_scaled_layers,
         input_dimension=original_model.modules[config.scale.scale_location].in_features,
         latent_dimension=config.autoencoder.ae_dim,
         nonlinearity=config.autoencoder.ae_nonlinearity,
     ).to(device)
+
+    # autoencoder = ExponentialKoopmanAutencoder(
+    #     k=config.scale.num_scaled_layers,
+    #     input_dimension=original_model.modules[config.scale.scale_location].in_features,
+    #     latent_dimension=config.autoencoder.ae_dim,
+    #     nonlinearity=config.autoencoder.ae_nonlinearity,
+    # ).to(device)
 
     autoencoder.summary()
 
@@ -440,6 +527,8 @@ def main(config_path_or_obj: Optional[Path | str | Config] = None):
             device=device,
             optimizer=optimizer,
             config=config,
+            means=means,
+            stds=stds,
         )
 
         # scheduler.step(losses["epoch_loss"])

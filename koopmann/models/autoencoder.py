@@ -36,6 +36,7 @@ class Autoencoder(BaseTorchModel):
 
     def __init__(
         self,
+        k: int,
         input_dimension: int = 2,
         latent_dimension: int = 4,
         hidden_configuration: Optional[List[Int]] = None,
@@ -51,6 +52,7 @@ class Autoencoder(BaseTorchModel):
 
         self.input_dimension = input_dimension
         self.latent_dimension = latent_dimension
+        self.steps = k
 
         # Convert string nonlinearity to class
         self.nonlinearity = nonlinearity
@@ -60,8 +62,9 @@ class Autoencoder(BaseTorchModel):
         if not hidden_configuration:
             self.hidden_configuration = [input_dimension * 2]
             channel_dims = [
-                (input_dimension, input_dimension * 2),
-                (input_dimension * 2, latent_dimension),
+                (input_dimension, input_dimension * 4),
+                # (input_dimension * 8, input_dimension * 4),
+                (input_dimension * 4, latent_dimension),
             ]
         else:
             self.hidden_configuration = hidden_configuration
@@ -217,6 +220,7 @@ class Autoencoder(BaseTorchModel):
             input_dimension=literal_eval(metadata["input_dimension"]),
             latent_dimension=literal_eval(metadata["latent_dimension"]),
             nonlinearity=metadata["nonlinearity"],
+            k=literal_eval(metadata["steps"]),
         )
 
         # Load weights
@@ -232,6 +236,7 @@ class Autoencoder(BaseTorchModel):
             "latent_dimension": str(self.latent_dimension),
             "hidden_configuration": str(self.hidden_configuration),
             "nonlinearity": str(self.nonlinearity),
+            "steps": str(self.steps),
         }
 
         for key, value in kwargs.items():
@@ -276,52 +281,13 @@ class ExponentialKoopmanAutencoder(Autoencoder):
         nonlinearity: str = "leakyrelu",
     ):
         super().__init__(
+            k,
             input_dimension,
             latent_dimension,
             hidden_configuration,
             nonlinearity,
         )
-        self.steps = k
 
         parametrize.register_parametrization(
             self.koopman_matrix.linear_layer, "weight", MatrixExponential(k=k, dim=latent_dimension)
         )
-
-    @classmethod
-    def load_model(cls, file_path: str | Path):
-        """Load model."""
-
-        # Assert path
-        assert Path(file_path).exists(), f"Model file {file_path} does not exist."
-
-        # Parse metadata
-        metadata = parse_safetensors_metadata(file_path=file_path)
-
-        # Load base model
-        model = cls(
-            input_dimension=literal_eval(metadata["input_dimension"]),
-            latent_dimension=literal_eval(metadata["latent_dimension"]),
-            nonlinearity=metadata["nonlinearity"],
-            k=literal_eval(metadata["steps"]),
-        )
-
-        # Load weights
-        load_model(model, file_path, device=get_device())
-
-        return model, metadata
-
-    def save_model(self, file_path: str | Path, **kwargs):
-        """Save model."""
-
-        metadata = {
-            "input_dimension": str(self.input_dimension),
-            "latent_dimension": str(self.latent_dimension),
-            "hidden_configuration": str(self.hidden_configuration),
-            "nonlinearity": str(self.nonlinearity),
-            "steps": str(self.steps),
-        }
-
-        for key, value in kwargs.items():
-            metadata[key] = str(value)
-
-        save_model(self, Path(file_path), metadata=metadata)

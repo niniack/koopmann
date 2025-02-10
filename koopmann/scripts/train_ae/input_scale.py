@@ -2,9 +2,10 @@ import os
 import pdb
 import sys
 from collections import OrderedDict, defaultdict
+from copy import deepcopy
 from functools import reduce
 from pathlib import Path
-from typing import Literal, Optional
+from typing import List, Literal, Optional
 
 import fire
 import torch
@@ -16,10 +17,11 @@ from pydantic import (
     NonNegativeInt,
     PositiveFloat,
     PositiveInt,
+    StrictBool,
 )
 from safetensors.torch import save_model
 from torch import linalg, nn, optim
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, ReduceLROnPlateau
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, ReduceLROnPlateau, StepLR
 from torch.utils.data import DataLoader
 
 import wandb
@@ -60,6 +62,9 @@ class AutoencoderConfig(BaseModel):
     lambda_reconstruction: NonNegativeFloat
     lambda_prediction: NonNegativeFloat
     lambda_id: NonNegativeFloat
+    exp_param: StrictBool
+    batchnorm: StrictBool
+    hidden_config: List[PositiveInt]
     ae_nonlinearity: Optional[str] = None
 
 
@@ -87,311 +92,11 @@ def pad_act(x, target_size):
     return x
 
 
-def gather_layer_stats(model, dataloader, device):
-    """
-    Runs forward passes on the entire `dataloader` and accumulates
-    sum, sum-of-squares, and count for each layer's activation.
-
-    Returns:
-        means: dict {layer_index: torch.Tensor of shape [layer_dim]}
-        stds:  dict {layer_index: torch.Tensor of shape [layer_dim]}
-    """
-    # We'll store running sums, sums-of-squares, and counts
-    sums = defaultdict(lambda: 0.0)
-    sums_sq = defaultdict(lambda: 0.0)
-    counts = defaultdict(lambda: 0)
-
-    model.hook_model()
-
-    with torch.no_grad():
-        for X, _ in dataloader:
-            X = X.to(device)
-            # Flatten if needed (MNIST case)
-            X = X.flatten(start_dim=1)
-
-            # Forward pass
-            _ = model(X)
-            # Collect the intermediate activations
-            acts = model.get_fwd_activations()
-
-            # If you also want "input" as layer 0, handle that separately
-            # (or treat it consistently below)
-            layer_id = 0
-            # We'll treat the input as layer_id=0
-            # Then subsequent hooks as 1,2,...
-
-            # Input stats (optional if you want them normalized too)
-            input_batch_size, input_dim = X.shape
-            sums[0] += X.sum(dim=0)
-            sums_sq[0] += (X * X).sum(dim=0)
-            counts[0] += input_batch_size
-
-            # Now the hooked activations
-            for k, val in acts.items():
-                # val has shape [batch_size, layer_dim]
-                # Let's shift it by +1 if you want input as "layer 0"
-                layer_id = k + 1
-                bsz, dim = val.shape
-                sums[layer_id] += val.sum(dim=0)
-                sums_sq[layer_id] += (val * val).sum(dim=0)
-                counts[layer_id] += bsz
-
-    # Now compute mean and std for each layer
-    means = {}
-    stds = {}
-    for layer_id in sorted(sums.keys()):
-        # sums[layer_id] is shape [layer_dim]
-        # sums_sq[layer_id] is shape [layer_dim]
-        # counts[layer_id] is integer
-        layer_count = counts[layer_id]
-        layer_sum = sums[layer_id]
-        layer_sum_sq = sums_sq[layer_id]
-
-        # Mean
-        mean = layer_sum / layer_count
-
-        # Variance = E[x^2] - E[x]^2
-        # E[x^2] = layer_sum_sq / layer_count
-        var = (layer_sum_sq / layer_count) - mean**2
-        std = torch.sqrt(torch.clamp(var, min=1e-9))  # avoid tiny/negative
-
-        means[layer_id] = mean
-        stds[layer_id] = std
-
-    return means, stds
-
-
-########################## LOSSES ##########################
-def compute_recons_loss(act_dict, autoencoder, k):
-    """
-    Computes reconstruction loss in state space for all layers
-    + latent space prediction loss after k steps
-    """
-    padded_acts = []
-    masks = []
-    ae_input_size = autoencoder.encoder[0].in_features
-    for act in act_dict.values():
-        # Pad activations
-        padded_acts.append(pad_act(act, ae_input_size))
-
-        # Build a mask to ignore "extra" neurons in downstream activations
-        # Only relevant for the second layer
-        mask = torch.zeros(ae_input_size, device=act.device)
-        curr_size = act.size(-1)
-        mask[:curr_size] = 1
-        masks.append(mask)
-
-    # Latent act for each padded act
-    latent_acts = [autoencoder._encode(padded_act) for padded_act in padded_acts]
-
-    # Stack lists
-    padded_acts = torch.stack(padded_acts, dim=1)  # shape: batch, layers, neurons
-    masks = torch.stack(masks, dim=0)  # shape: layers, neurons
-    latent_acts = torch.stack(latent_acts, dim=1)  # shape: batch, layers, neurons
-
-    #### STATE SPACE
-    # Reconstruction with AE
-    recons_acts = [
-        autoencoder(padded_act, k=0).reconstruction for padded_act in padded_acts.unbind(dim=1)
-    ]
-    recons_acts = torch.stack(recons_acts, dim=1)
-    masked_diff = (padded_acts - recons_acts) * masks.unsqueeze(dim=0)
-    recons_error = (masked_diff).pow(2).sum()
-
-    # Total variance for padded acts in state space
-    masked_centered_acts = padded_acts - padded_acts.mean(dim=0) * masks.unsqueeze(dim=0)
-    total_variance_state_space = masked_centered_acts.pow(2).sum()
-
-    #### LATENT SPACE
-    embedded_act = latent_acts[:, 0, :] @ linalg.matrix_power(
-        autoencoder.koopman_matrix.linear_layer.weight.T.detach(), k
-    )
-    latent_error = (embedded_act - latent_acts[:, -1, :]).pow(2).sum()
-
-    # Total variance for latent act
-    latent_last_centered_acts = latent_acts[:, -1, :] - latent_acts[:, -1, :].mean(dim=0)
-    total_variance_latent_space = latent_last_centered_acts.pow(2).sum()
-
-    # Error is scaled with total_variance
-    # Note that we didn't bother with dividing either value
-    # by the numel because it would cancel out!
-    return (recons_error / total_variance_state_space), (latent_error / total_variance_latent_space)
-
-
-def compute_k_prediction_loss(act_dict, autoencoder, k):
-    """
-    Computes the k-step prediction loss in state space.
-    """
-    # Extract activations from the dictionary
-    act_list = list(act_dict.values())
-    target_acts = act_list[-1]  # shape: batch, neurons
-    total_variance = (target_acts - target_acts.mean(dim=0)).pow(2).sum()
-
-    # Compute the prediction for the first activation
-    # Autoencoder outputs are shaped [layers, batch, neurons]
-    all_preds = autoencoder(x=act_list[0], k=k).predictions
-    pred_k = all_preds[-1, :, : target_acts.size(-1)]
-    state_space_pred_error = (pred_k - target_acts).pow(2).sum()
-
-    # Compute and return the loss
-    return state_space_pred_error / total_variance
-
-
-# def compute_identity_loss(autoencoder, epsilon=1e-6, eig_threshold=0.5):
-#     # Extract the dynamics matrix
-#     dynamics_matrix = autoencoder.koopman_matrix.linear_layer.weight
-
-#     # Compute the eigenvalues of the dynamics matrix
-#     eigenvalues = torch.linalg.eigvals(dynamics_matrix)
-
-#     # Get the modulus of the eigenvalues
-#     moduli = torch.abs(eigenvalues)
-
-#     # Determine stable and dynamic eigenvalues
-#     stable_indices = torch.isclose(
-#         moduli, torch.tensor(1.0, device=moduli.device), atol=0.1
-#     )  # Close to 1.0
-#     dynamic_indices = ~stable_indices  # Everything else is dynamic
-
-#     # Compute L_stat: Penalize stable eigenvalues from 1.0
-#     if stable_indices.any():
-#         stable_moduli = moduli[stable_indices]
-#         l_stat = torch.mean((stable_moduli - 1.0) ** 2)
-#     else:
-#         l_stat = torch.tensor(0.0, device=dynamics_matrix.device)
-
-#     # Compute L_dyn: Penalize dynamic eigenvalues crossing the threshold
-#     if dynamic_indices.any():
-#         dynamic_moduli = moduli[dynamic_indices]
-#         l_dyn = torch.mean(torch.relu(dynamic_moduli - eig_threshold))
-#     else:
-#         l_dyn = torch.tensor(0.0, device=dynamics_matrix.device)
-
-#     # Combined eigenvalue loss (L_eig = L_stat + L_dyn)
-#     l_eig = l_stat + l_dyn
-
-#     return l_eig
-
-
-########################## TRAIN LOOP ##########################
-def train_one_epoch(
-    model: nn.Module,
-    autoencoder: nn.Module,
-    train_loader: DataLoader,
-    device: torch.device,
-    optimizer: torch.optim.Optimizer,
-    config: Config,
-    means: dict,
-    stds: dict,
-) -> dict:
-    # Per epoch losses
-    loss_epoch = 0
-    ae_recons_loss_epoch = 0
-    ae_prediction_loss_epoch = 0
-    ae_id_loss_epoch = 0
-
-    for input, label in train_loader:
-        # Unwrap batch
-        input, label = input.to(device), label.to(device).squeeze()
-
-        # Freeze original model
-        autoencoder.train()
-        model.eval()
-
-        # Attach model hooks
-        model.hook_model()
-        optimizer.zero_grad()
-
-        # Raw forward pass
-        with torch.no_grad():
-            _ = model.forward(input)
-
-        all_acts = model.get_fwd_activations()
-
-        # Add the inputs as part of the `all_acts` dict. Haram!
-        # But that requires shifting each key down one
-        temp_all_acts = OrderedDict()
-        temp_all_acts[0] = input.flatten(start_dim=1)
-        for key, val in all_acts.items():
-            temp_all_acts[key + 1] = val
-        all_acts = temp_all_acts
-
-        # NOTE: Does not include scaled activations!
-        # Get first and last elements without modifying the dict
-        first_key, first_value = next(iter(all_acts.items()))
-        last_key, last_value = next(iter(reversed(all_acts.items())))
-        first_last_acts = {first_key: first_value, last_key: last_value}
-
-        # Compute autoencoder losses
-        ae_recons_loss, ae_id_loss = compute_recons_loss(
-            act_dict=all_acts,
-            autoencoder=autoencoder,
-            k=config.scale.num_scaled_layers,
-        )
-        ae_pred_loss = compute_k_prediction_loss(
-            act_dict=first_last_acts,
-            autoencoder=autoencoder,
-            k=config.scale.num_scaled_layers,
-        )
-
-        # Combine total loss
-        loss = (
-            config.autoencoder.lambda_reconstruction * ae_recons_loss
-            + config.autoencoder.lambda_prediction * ae_pred_loss
-            + config.autoencoder.lambda_id * ae_id_loss
-        )
-
-        loss.backward()
-        optimizer.step()
-
-        # Accumulate losses
-        loss_epoch += loss.item()
-        ae_recons_loss_epoch += ae_recons_loss.item()
-        ae_prediction_loss_epoch += ae_pred_loss.item()
-        ae_id_loss_epoch += ae_id_loss.item()
-
-    # Average losses over all batches
-    epoch_loss = loss_epoch / len(train_loader)
-    avg_recons_loss = ae_recons_loss_epoch / len(train_loader)
-    avg_prediction_loss = ae_prediction_loss_epoch / len(train_loader)
-    avg_id_loss = ae_id_loss_epoch / len(train_loader)
-
-    # Return all metrics as a dictionary
-    return {
-        "epoch_loss": epoch_loss,
-        "recons_loss": avg_recons_loss,
-        "prediction_loss": avg_prediction_loss,
-        "id_loss": avg_id_loss,
-    }
-
-
-########################## MAIN ##########################
-def setup(config_path_or_obj: Optional[Path | str | Config] = None):
-    # Initialize wandb
-    wandb.init(entity="nishantaswani", project="koopmann")
-
-    # Validate
-    if config_path_or_obj is None and not dict(wandb.config):
-        sys.exit("No configuration found for the run! Provide a file")
-
-    # Update wandb config
-    wandb_config_dict = dict(wandb.config)
-
-    config = load_config(
-        config_path_or_obj or wandb_config_dict,
-        config_model=Config,
-    )
-    logger.info(config)
-
-    set_seed(config.seed)
-
-    return config
-
-
 def eval_autoencoder(config: Config, model: nn.Module, autoencoder: nn.Module) -> None:
     model.eval()
     model.hook_model()
     autoencoder.eval()
+
     # Dataset
     cloned_ds_config = DatasetConfig(
         dataset_name=config.train_data.dataset_name,
@@ -410,32 +115,28 @@ def eval_autoencoder(config: Config, model: nn.Module, autoencoder: nn.Module) -
     k = config.scale.num_scaled_layers
     recons_error = 0.0
     prediction_error = 0.0
+
+    # Iterate through loader
     for batch in test_loader:
         input, label = batch
         input, label = input.to(device), label.to(device).squeeze()
         _ = model(input)
 
         gt_acts = model.get_fwd_activations()
-        original_num_layers = len(model.modules)
-        first_act = gt_acts[0]
-        last_act = gt_acts[original_num_layers - 1]
+        for act in gt_acts:
+            recons = autoencoder(
+                x=pad_act(act, target_size=autoencoder.encoder[0].in_features), k=0
+            ).reconstruction[:, : act.size(-1)]
+            recons_error += F.mse_loss(act.to(device), recons.to(device)).item()
 
-        # First layer
-        recons = autoencoder(
-            x=pad_act(first_act, target_size=autoencoder.encoder[0].in_features), k=0
-        ).reconstruction
-        recons_error += F.mse_loss(first_act.to(device), recons.to(device)).item()
-
-        # Last layer
-        recons = autoencoder(
-            x=pad_act(last_act, target_size=autoencoder.encoder[0].in_features), k=0
-        ).reconstruction[:, : last_act.size(-1)]
-        recons_error += F.mse_loss(last_act.to(device), recons.to(device)).item()
-
+        # Use the *raw input* to predict forward
         all_pred = autoencoder(
-            x=pad_act(first_act, target_size=autoencoder.encoder[0].in_features),
+            x=pad_act(input, target_size=autoencoder.encoder[0].in_features),
             k=k,
         ).predictions
+
+        # Compare final predicted activations to the final ground truth activations
+        last_act = gt_acts[-1]
         pred = all_pred[-1, :, : last_act.size(-1)]
         prediction_error += F.mse_loss(last_act.to(device), pred.to(device)).item()
 
@@ -464,6 +165,363 @@ def eval_autoencoder(config: Config, model: nn.Module, autoencoder: nn.Module) -
     )
 
 
+def _prepare_padded_acts_and_masks(act_dict, autoencoder):
+    """
+    Returns:
+      padded_acts: list of padded activation tensors (one per layer)
+      masks: list of 1/0 masks for ignoring "extra" neurons in padded activations
+    """
+
+    # Autoencoder input dimension
+    ae_input_size = autoencoder.encoder[0].in_features
+    padded_acts = []
+    masks = []
+
+    # Iterate through all activations
+    for act in act_dict.values():
+        # Pad activations
+        padded_act = pad_act(act, ae_input_size)
+        padded_acts.append(padded_act)
+
+        # Construct a mask that has '1' up to original size, then 0
+        mask = torch.zeros(ae_input_size, device=act.device)
+        mask[: act.size(-1)] = 1
+        masks.append(mask)
+
+    return padded_acts, masks
+
+
+def compute_layer_stats(model, loader, device):
+    """
+    Run forward passes through `model` on the entire `loader` dataset
+    and accumulate means & stds for each layer's (and input) activations.
+
+    Returns:
+        means: dict of {layer_key: Tensor([layer_dim])}
+        stds:  dict of {layer_key: Tensor([layer_dim])}
+    """
+    model.eval()
+    model.hook_model()  # presumably sets up forward hooks for hidden layers
+    sums = {}
+    sums_sq = {}
+    counts = {}
+
+    with torch.no_grad():
+        for batch in loader:
+            inputs, _ = batch
+            inputs = inputs.to(device)
+
+            # A) Treat the input as layer "input" or layer 0
+            # Flatten if your hooking logic expects a flattened input
+            flat_inp = inputs.flatten(start_dim=1)
+            input_key = 0
+            if input_key not in sums:
+                sums[input_key] = 0.0
+                sums_sq[input_key] = 0.0
+                counts[input_key] = 0
+
+            sums[input_key] += flat_inp.sum(dim=0)  # sum over batch dimension
+            sums_sq[input_key] += (flat_inp**2).sum(dim=0)
+            counts[input_key] += flat_inp.shape[0]
+
+            # B) Forward pass to get hidden activations
+            _ = model(flat_inp)  # triggers hooks
+            act_dict = model.get_fwd_activations()
+            # act_dict might look like {0: Tensor([B, dim0]), 1: Tensor([B, dim1]), ...}
+
+            # C) Accumulate sums, sums_sq for each hidden layer
+            for k, acts in act_dict.items():
+                k = k + 1
+                if k not in sums:
+                    sums[k] = 0.0
+                    sums_sq[k] = 0.0
+                    counts[k] = 0
+                sums[k] += acts.sum(dim=0)
+                sums_sq[k] += (acts**2).sum(dim=0)
+                counts[k] += acts.shape[0]
+
+    # 3) Compute final means and stds (per feature)
+    means = {}
+    stds = {}
+    for k in sums.keys():
+        mean_k = sums[k] / counts[k]
+        var_k = (sums_sq[k] / counts[k]) - (mean_k**2)
+        std_k = var_k.sqrt()
+
+        means[k] = mean_k
+        stds[k] = std_k
+
+    return means, stds
+
+
+# def compute_state_space_recons_loss(act_dict, autoencoder):
+#     """
+#     Computes the reconstruction loss in the *state space* across all layers.
+#     Returns reconstruction MSE scaled by total variance (across all layers).
+#     """
+#     # Prepare padded activations and masks
+#     # shape: [batch, layer, norms]
+#     padded_acts, masks = _prepare_padded_acts_and_masks(act_dict, autoencoder)
+
+#     # Stack along layers dimension
+#     padded_acts = torch.stack(padded_acts, dim=1)  # shape: [batch, layers, neurons]
+#     masks = torch.stack(masks, dim=0)  # shape: [layers, neurons]
+#     pdb.set_trace()
+
+#     # Reconstruct each layer’s padded activation (k=0 => no Koopman stepping)
+#     recons_acts = [
+#         autoencoder(padded_act, k=0).reconstruction for padded_act in padded_acts.unbind(dim=1)
+#     ]
+
+#     # Same shape as padded_acts, shape: [batch, layers, neurons]
+#     recons_acts = torch.stack(recons_acts, dim=1)
+#     pdb.set_trace()
+
+#     # MSE in state space, ignoring masked-out neurons
+#     masked_diff = (padded_acts - recons_acts) * masks.unsqueeze(dim=0)
+#     recons_error = masked_diff.pow(2).sum()
+#     pdb.set_trace()
+
+#     # Total variance in state space
+#     masked_centered_acts = (padded_acts - padded_acts.mean(dim=0)) * masks.unsqueeze(dim=0)
+#     total_variance_state_space = masked_centered_acts.pow(2).sum()
+#     pdb.set_trace()
+
+#     # Return ratio = (MSE) / (variance)
+#     return recons_error / total_variance_state_space
+
+
+def compute_state_space_recons_loss(act_dict, autoencoder):
+    """
+    Computes reconstruction loss in state space via fixed random projections.
+    For each layer, projects activations to a fixed D-dim space, reconstructs,
+    inverts the projection, and computes the MSE scaled by total variance.
+    """
+    # Cache projections on the autoencoder object.
+    if not hasattr(autoencoder, "random_projections"):
+        autoencoder.random_projections = {}
+
+    loss = 0.0
+    total_var = 0.0
+    D = autoencoder.encoder[0].in_features
+
+    # pdb.set_trace()
+
+    for key, x in act_dict.items():
+        # x: [batch, d] for this layer.
+        batch_size, d = x.shape
+        # Get (or create) a random projection Q with orthonormal columns: shape [D, d]
+        if key not in autoencoder.random_projections:
+            Q = torch.randn(D, d, device=x.device)
+            Q, _ = torch.linalg.qr(Q)  # Orthonormalize columns (assumes D >= d)
+            autoencoder.random_projections[key] = Q
+        else:
+            Q = autoencoder.random_projections[key]
+
+        # pdb.set_trace()
+
+        # Project to D-dimensional space: [batch, D]
+        x_proj = x @ Q.T
+        # Reconstruct in D-dim space using the autoencoder (k=0 => no Koopman stepping)
+        recon_proj = autoencoder(x_proj, k=0).reconstruction
+        # Invert the projection: [batch, d]
+        x_recons = recon_proj @ Q
+
+        # pdb.set_trace()
+
+        # Accumulate squared error and variance in original space
+        diff = x - x_recons
+        loss += diff.pow(2).sum()
+        x_mean = x.mean(dim=0, keepdim=True)
+        total_var += (x - x_mean).pow(2).sum()
+
+        # pdb.set_trace()
+
+    return loss / total_var
+
+
+########################## K-Step Prediction Loss (Latent Space) ##########################
+def compute_latent_space_prediction_loss(act_dict, autoencoder, k):
+    """
+    Computes the k-step prediction loss purely in the *latent space*.
+    We encode each layer’s activation into latent space, then compare
+    the predicted next-layer embedding (via the Koopman matrix)
+    with the actual final-layer embedding.
+    """
+    # Prepare padded activations (we don't need masks for latent space)
+    padded_acts, _ = _prepare_padded_acts_and_masks(act_dict, autoencoder)
+
+    # Encode each layer’s padded activation into latent space
+    latent_acts = [autoencoder._encode(padded_act) for padded_act in padded_acts]
+    latent_acts = torch.stack(latent_acts, dim=1)  # shape: [batch, layers, latent_dim]
+
+    # Koopman k-step: multiply the *first* layer’s latent by K^k
+    K = autoencoder.koopman_matrix.linear_layer.weight.T.detach()
+    embedded_act = latent_acts[:, 0, :] @ linalg.matrix_power(K, k)
+
+    # Compare predicted embedding with the actual *last-layer* embedding
+    latent_error = (embedded_act - latent_acts[:, -1, :]).pow(2).sum()
+
+    # Total variance in final layer’s latent
+    latent_last_centered_acts = latent_acts[:, -1, :] - latent_acts[:, -1, :].mean(dim=0)
+    total_variance_latent_space = latent_last_centered_acts.pow(2).sum()
+
+    return latent_error / total_variance_latent_space
+
+
+########################## K-Step Prediction Loss (State Space) ##########################
+def compute_k_prediction_loss(act_dict, autoencoder, k):
+    """
+    Computes the k-step prediction loss in *state space* for the final activation.
+    Compares the predicted state at k steps with the actual final-layer activation.
+    """
+    # Extract activations from the dictionary
+    act_list = list(act_dict.values())
+
+    # We'll predict the final-layer activation from the first-layer activation
+    target_acts = act_list[-1]  # shape: [batch, neurons]
+    total_variance = (target_acts - target_acts.mean(dim=0)).pow(2).sum()
+
+    # Get autoencoder predictions: shape [layers, batch, neurons]
+    all_preds = autoencoder(x=act_list[0], k=k).predictions
+
+    # The final prediction is all_preds[-1], but we may slice to the correct size
+    pred_k = all_preds[-1, :, : target_acts.size(-1)]
+    state_space_pred_error = (pred_k - target_acts).pow(2).sum()
+
+    return state_space_pred_error / total_variance
+
+
+########################## TRAIN LOOP ##########################
+def train_one_epoch(
+    model: nn.Module,
+    autoencoder: nn.Module,
+    train_loader: DataLoader,
+    device: torch.device,
+    optimizer: torch.optim.Optimizer,
+    config: Config,
+    means: dict,
+    stds: dict,
+) -> dict:
+    # Per epoch losses
+    loss_epoch = 0
+    ae_recons_loss_epoch = 0
+    ae_state_prediction_loss_epoch = 0
+    ae_latent_pred_loss_epoch = 0
+
+    for input, label in train_loader:
+        # Unwrap batch
+        input, label = input.to(device), label.to(device).squeeze()
+
+        # Freeze original model
+        autoencoder.train()
+        model.eval()
+
+        # Attach model hooks
+        model.hook_model()
+        optimizer.zero_grad()
+
+        # Raw forward pass
+        with torch.no_grad():
+            _ = model.forward(input)
+
+        # Get activations
+        all_acts = model.get_fwd_activations()
+
+        if config.scale.scale_location == 0:
+            # Add the original inputs as part of the `all_acts` dict.
+            # But that requires shifting each key down one
+            temp_all_acts = OrderedDict()
+            temp_all_acts[0] = input.flatten(start_dim=1)
+            for key, val in all_acts.items():
+                temp_all_acts[key + 1] = val
+
+            all_acts = temp_all_acts
+
+        # Get first and last elements without modifying the dict
+        first_key, first_value = next(iter(all_acts.items()))
+        last_key, last_value = next(iter(reversed(all_acts.items())))
+        first_last_acts = {first_key: first_value, last_key: last_value}
+
+        # Compute autoencoder losses
+        ae_recons_loss = compute_state_space_recons_loss(
+            act_dict=all_acts,
+            autoencoder=autoencoder,
+        )
+
+        ae_state_pred_loss = compute_k_prediction_loss(
+            act_dict=first_last_acts,
+            autoencoder=autoencoder,
+            k=config.scale.num_scaled_layers,
+        )
+        ae_latent_pred_loss = compute_latent_space_prediction_loss(
+            act_dict=first_last_acts,
+            autoencoder=autoencoder,
+            k=config.scale.num_scaled_layers,
+        )
+
+        # Combine total loss
+        loss = (
+            config.autoencoder.lambda_reconstruction * ae_recons_loss
+            + config.autoencoder.lambda_prediction * ae_state_pred_loss
+            + config.autoencoder.lambda_id * ae_latent_pred_loss
+        )
+
+        loss.backward()
+        optimizer.step()
+
+        # Accumulate losses
+        loss_epoch += loss.item()
+        ae_recons_loss_epoch += ae_recons_loss.item()
+        ae_state_prediction_loss_epoch += ae_state_pred_loss.item()
+        ae_latent_pred_loss_epoch += ae_latent_pred_loss.item()
+
+    # Average losses over all batches
+    epoch_loss = loss_epoch / len(train_loader)
+    avg_recons_loss = ae_recons_loss_epoch / len(train_loader)
+    avg_state_pred_loss = ae_state_prediction_loss_epoch / len(train_loader)
+    avg_latent_pred_loss = ae_latent_pred_loss_epoch / len(train_loader)
+
+    # Return all metrics as a dictionary
+    return {
+        "epoch_loss": epoch_loss,
+        "recons_loss": avg_recons_loss,
+        "state_pred_loss": avg_state_pred_loss,
+        "observable_pred_loss": avg_latent_pred_loss,
+    }
+
+
+########################## MAIN ##########################
+def setup(config_path_or_obj: Optional[Path | str | Config] = None):
+    # Initialize wandb
+    wandb.init(entity="nishantaswani", project="koopmann")
+
+    # Validate
+    if config_path_or_obj is None and not dict(wandb.config):
+        sys.exit("No configuration found for the run! Provide a file")
+
+    # Update wandb config
+    wandb_config_dict = dict(wandb.config)
+
+    config = load_config(
+        config_path_or_obj or wandb_config_dict,
+        config_model=Config,
+    )
+    logger.info(config)
+
+    if not dict(wandb.config):
+        cloned_config = deepcopy(dict(config))
+        cloned_config["train_data"] = dict(config.train_data)
+        cloned_config["optim"] = dict(config.optim)
+        cloned_config["scale"] = dict(config.scale)
+        cloned_config["autoencoder"] = dict(config.autoencoder)
+        wandb.config.update(cloned_config)
+
+    set_seed(config.seed)
+
+    return config
+
+
 def main(config_path_or_obj: Optional[Path | str | Config] = None):
     # Setup WandB and load config
     config = setup(config_path_or_obj)
@@ -483,24 +541,20 @@ def main(config_path_or_obj: Optional[Path | str | Config] = None):
     original_model, _ = MLP.load_model(file_path=config.scale.model_to_scale)
     original_model.to(device).eval()
 
-    means, stds = gather_layer_stats(original_model, train_loader, device)
-
-    pdb.set_trace()
+    means, stds = compute_layer_stats(original_model, train_loader, device)
 
     # Build autoencoder
-    autoencoder = Autoencoder(
-        k=config.scale.num_scaled_layers,
-        input_dimension=original_model.modules[config.scale.scale_location].in_features,
-        latent_dimension=config.autoencoder.ae_dim,
-        nonlinearity=config.autoencoder.ae_nonlinearity,
-    ).to(device)
-
-    # autoencoder = ExponentialKoopmanAutencoder(
-    #     k=config.scale.num_scaled_layers,
-    #     input_dimension=original_model.modules[config.scale.scale_location].in_features,
-    #     latent_dimension=config.autoencoder.ae_dim,
-    #     nonlinearity=config.autoencoder.ae_nonlinearity,
-    # ).to(device)
+    autoencoder_kwargs = {
+        "k": config.scale.num_scaled_layers,
+        "input_dimension": original_model.modules[config.scale.scale_location].in_features,
+        "latent_dimension": config.autoencoder.ae_dim,
+        "nonlinearity": config.autoencoder.ae_nonlinearity,
+        "hidden_configuration": config.autoencoder.hidden_config,
+    }
+    if config.autoencoder.exp_param:
+        autoencoder = ExponentialKoopmanAutencoder(**autoencoder_kwargs).to(device)
+    else:
+        autoencoder = Autoencoder(**autoencoder_kwargs).to(device)
 
     autoencoder.summary()
 
@@ -515,6 +569,23 @@ def main(config_path_or_obj: Optional[Path | str | Config] = None):
     #     params=list(autoencoder.parameters()),
     #     lr=config.optim.learning_rate,
     #     weight_decay=config.optim.weight_decay,
+    # )
+
+    # # Example: Reduce LR if loss doesn't improve for 'patience' epochs
+    # scheduler = ReduceLROnPlateau(
+    #     optimizer,
+    #     mode="min",  # we want to minimize the loss
+    #     factor=0.5,  # scale LR by this factor
+    #     patience=5,  # wait X epochs with no improvement
+    #     threshold=1e-3,  # threshold for measuring new optimum
+    #     min_lr=1e-6,  # lower bound on the learning rate
+    #     verbose=True,  # print a message to console on LR reduction
+    # )
+
+    # scheduler = StepLR(
+    #     optimizer,
+    #     step_size=50,  # decay every 50 epochs
+    #     gamma=0.5,  # multiply LR by 0.5
     # )
 
     # Loop over epochs
@@ -532,6 +603,7 @@ def main(config_path_or_obj: Optional[Path | str | Config] = None):
         )
 
         # scheduler.step(losses["epoch_loss"])
+        # scheduler.step()
 
         # Log metrics
         if (epoch + 1) % config.print_freq == 0:
@@ -540,8 +612,8 @@ def main(config_path_or_obj: Optional[Path | str | Config] = None):
                     "epoch": epoch,
                     "train_loss": losses["epoch_loss"],
                     "recons_loss": losses["recons_loss"],
-                    "prediction_loss": losses["prediction_loss"],
-                    "id_loss": losses["id_loss"],
+                    "state_pred_loss": losses["state_pred_loss"],
+                    "observable_pred_loss": losses["observable_pred_loss"],
                 }
             )
 
@@ -551,11 +623,11 @@ def main(config_path_or_obj: Optional[Path | str | Config] = None):
                 f"Epoch {epoch + 1}/{config.optim.num_epochs}, "
                 f"Train Loss: {losses['epoch_loss']:.4f}, "
                 f"Reconstruction Loss: {losses['recons_loss']:.4f}, "
-                f"Prediction Loss: {losses['prediction_loss']:.4f} "
-                f"Identity Loss: {losses['id_loss']:.4f} "
+                f"State Prediction Loss: {losses['state_pred_loss']:.4f} "
+                f"Observable Prediction Loss: {losses['observable_pred_loss']:.4f} "
             )
 
-    # eval_autoencoder(config, original_model, autoencoder)
+    eval_autoencoder(config, original_model, autoencoder)
 
     # Save model
     if config.save_dir:

@@ -9,7 +9,6 @@ from typing import Literal, Optional
 import fire
 import torch
 import torch.nn.functional as F
-import wandb
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -23,6 +22,7 @@ from torch import linalg, nn, optim
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, ReduceLROnPlateau
 from torch.utils.data import DataLoader
 
+import wandb
 from koopmann.data import (
     DatasetConfig,
     create_data_loader,

@@ -8,7 +8,7 @@ train_data:
 
 optim:
   num_epochs: 200
-  learning_rate: 5e-4
+  learning_rate: 3e-4
   weight_decay: 1e-4
   betas: [0.9, 0.999]
 
@@ -18,13 +18,16 @@ scale:
   num_scaled_layers: 1
 
 autoencoder:
-  ae_dim: 256
-  lambda_reconstruction: 30
-  lambda_prediction: 1
-  lambda_id: 1
+  ae_dim: 1_024
+  hidden_config: [3_136]
   ae_nonlinearity: "leakyrelu"
+  batchnorm: False
+  exp_param: False
+  lambda_reconstruction: 1
+  lambda_prediction: 0
+  lambda_id: 0
 
-batch_size: 4_096
+batch_size: 16_384
 seed: 21
 save_name: "mnist_model"
 save_dir: "/home/nsa325/work/koopmann/model_saves/scaling/"

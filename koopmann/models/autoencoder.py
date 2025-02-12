@@ -41,6 +41,7 @@ class Autoencoder(BaseTorchModel):
         latent_dimension: int = 4,
         hidden_configuration: Optional[List[Int]] = None,
         nonlinearity: str = "leakyrelu",
+        batchnorm: bool = False,
     ):
         super().__init__()
 
@@ -53,6 +54,10 @@ class Autoencoder(BaseTorchModel):
         self.input_dimension = input_dimension
         self.latent_dimension = latent_dimension
         self.steps = k
+        self.batchnorm = batchnorm
+
+        # Store random projections in a ModuleDict as non-trainable parameters
+        self.random_projections = nn.ParameterDict()
 
         # Convert string nonlinearity to class
         self.nonlinearity = nonlinearity
@@ -60,15 +65,17 @@ class Autoencoder(BaseTorchModel):
 
         # Set up autoencoder architecture
         if not hidden_configuration:
-            self.hidden_configuration = [input_dimension * 2]
+            self.hidden_configuration = [input_dimension * 4]
             channel_dims = [
                 (input_dimension, input_dimension * 4),
-                # (input_dimension * 8, input_dimension * 4),
                 (input_dimension * 4, latent_dimension),
             ]
         else:
             self.hidden_configuration = hidden_configuration
-            raise NotImplementedError("Custom hidden configuration does not work yet!")
+            dims_list = [input_dimension, latent_dimension]
+            dims_list = dims_list[:1] + hidden_configuration + dims_list[1:]
+
+            channel_dims = [(dims_list[i - 1], dims_list[i]) for i in range(1, len(dims_list))]
 
         ################## ENCODER #################
         self._encoder = nn.Sequential()
@@ -79,7 +86,7 @@ class Autoencoder(BaseTorchModel):
                     out_features=channel_dims[i][1],
                     nonlinearity=nonlinearity,
                     bias=True,
-                    batchnorm=False,
+                    batchnorm=batchnorm,
                     hook=False,
                 )
             )
@@ -107,7 +114,7 @@ class Autoencoder(BaseTorchModel):
                     out_features=channel_dims[i][0],
                     nonlinearity=nonlinearity if (i != 0) else None,
                     bias=True,
-                    batchnorm=False,
+                    batchnorm=batchnorm,
                     hook=False,
                 )
             )
@@ -137,9 +144,9 @@ class Autoencoder(BaseTorchModel):
         return nn.Sequential(self._koopman_matrix, *(list(self._encoder) + list(self._decoder)))
 
     def _encode(self, x):
-        # Pre-encoder bias
-        x_bar = x - self.decoder[-1].linear_layer.bias
-        return self.encoder(x_bar)
+        ## Pre-encoder bias
+        # x_bar = x - self.decoder[-1].linear_layer.bias
+        return self.encoder(x)
 
     def _decode(self, x):
         return self.decoder(x)
@@ -206,7 +213,7 @@ class Autoencoder(BaseTorchModel):
         return activations
 
     @classmethod
-    def load_model(cls, file_path: str | Path):
+    def load_model(cls, file_path: str | Path, strict=True, **kwargs):
         """Load model."""
 
         # Assert path
@@ -215,16 +222,22 @@ class Autoencoder(BaseTorchModel):
         # Parse metadata
         metadata = parse_safetensors_metadata(file_path=file_path)
 
+        # # Stuff metadata
+        # for k, v in kwargs.items():
+        #     metadata[str(k)] = str(v)
+
         # Load base model
         model = cls(
             input_dimension=literal_eval(metadata["input_dimension"]),
             latent_dimension=literal_eval(metadata["latent_dimension"]),
             nonlinearity=metadata["nonlinearity"],
             k=literal_eval(metadata["steps"]),
+            batchnorm=literal_eval(metadata["batchnorm"]),
+            **kwargs,
         )
 
         # Load weights
-        load_model(model, file_path, device=get_device())
+        load_model(model, file_path, device=get_device(), strict=strict)
 
         return model, metadata
 
@@ -237,6 +250,7 @@ class Autoencoder(BaseTorchModel):
             "hidden_configuration": str(self.hidden_configuration),
             "nonlinearity": str(self.nonlinearity),
             "steps": str(self.steps),
+            "batchnorm": str(self.batchnorm),
         }
 
         for key, value in kwargs.items():
@@ -279,6 +293,7 @@ class ExponentialKoopmanAutencoder(Autoencoder):
         latent_dimension: int = 4,
         hidden_configuration: Optional[List[Int]] = None,
         nonlinearity: str = "leakyrelu",
+        batchnorm: bool = False,
     ):
         super().__init__(
             k,
@@ -286,6 +301,7 @@ class ExponentialKoopmanAutencoder(Autoencoder):
             latent_dimension,
             hidden_configuration,
             nonlinearity,
+            batchnorm,
         )
 
         parametrize.register_parametrization(

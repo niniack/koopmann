@@ -56,6 +56,9 @@ class Autoencoder(BaseTorchModel):
         self.steps = k
         self.batchnorm = batchnorm
 
+        # Store random projections in a ModuleDict as non-trainable parameters
+        self.random_projections = nn.ParameterDict()
+
         # Convert string nonlinearity to class
         self.nonlinearity = nonlinearity
         nonlinearity = StringtoClassNonlinearity[nonlinearity].value
@@ -141,9 +144,9 @@ class Autoencoder(BaseTorchModel):
         return nn.Sequential(self._koopman_matrix, *(list(self._encoder) + list(self._decoder)))
 
     def _encode(self, x):
-        # Pre-encoder bias
-        x_bar = x - self.decoder[-1].linear_layer.bias
-        return self.encoder(x_bar)
+        ## Pre-encoder bias
+        # x_bar = x - self.decoder[-1].linear_layer.bias
+        return self.encoder(x)
 
     def _decode(self, x):
         return self.decoder(x)
@@ -210,7 +213,7 @@ class Autoencoder(BaseTorchModel):
         return activations
 
     @classmethod
-    def load_model(cls, file_path: str | Path, **kwargs):
+    def load_model(cls, file_path: str | Path, strict=True, **kwargs):
         """Load model."""
 
         # Assert path
@@ -219,9 +222,9 @@ class Autoencoder(BaseTorchModel):
         # Parse metadata
         metadata = parse_safetensors_metadata(file_path=file_path)
 
-        # Stuff metadata
-        for k, v in kwargs.items():
-            metadata[str(k)] = str(v)
+        # # Stuff metadata
+        # for k, v in kwargs.items():
+        #     metadata[str(k)] = str(v)
 
         # Load base model
         model = cls(
@@ -230,10 +233,11 @@ class Autoencoder(BaseTorchModel):
             nonlinearity=metadata["nonlinearity"],
             k=literal_eval(metadata["steps"]),
             batchnorm=literal_eval(metadata["batchnorm"]),
+            **kwargs,
         )
 
         # Load weights
-        load_model(model, file_path, device=get_device())
+        load_model(model, file_path, device=get_device(), strict=strict)
 
         return model, metadata
 

@@ -8,7 +8,7 @@ train_data:
 
 optim:
   num_epochs: 200
-  learning_rate: 3e-4
+  learning_rate: 3e-3
   weight_decay: 1e-4
   betas: [0.9, 0.999]
 
@@ -21,9 +21,9 @@ autoencoder:
   ae_dim: 1_024
   hidden_config: [3_136]
   ae_nonlinearity: "leakyrelu"
-  batchnorm: False
+  batchnorm: True
   exp_param: False
-  lambda_reconstruction: 1
+  lambda_reconstruction: 25
   lambda_prediction: 0
   lambda_id: 0
 

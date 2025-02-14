@@ -39,6 +39,8 @@ pillow = "^11.0.0"
 imageio = {extras = ["ffmpeg"], version = "^2.36.1"}
 giotto-tda = "^0.6.2"
 torchdiffeq = "^0.2.5"
+matplotlib = "^3.10.0"
+neural-collapse = {git = "https://github.com/rhubarbwu/neural-collapse.git"}
 
 [[tool.poetry.source]]
 name = "pytorch"

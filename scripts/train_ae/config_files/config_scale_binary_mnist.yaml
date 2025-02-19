@@ -1,0 +1,31 @@
+train_data: 
+  dataset_name: "BinaryMNISTDataset"
+  num_samples: 60_000
+  split: "train"
+  torch_transform: null
+  seed: 42
+  negative_label: false
+
+optim:
+  num_epochs: 50
+  learning_rate: 1e-2
+  weight_decay: 1e-4
+  betas: [0.9, 0.999]
+
+scale:
+  model_to_scale: "/home/nsa325/work/koopmann/model_saves/mnist_model.safetensors"
+  scale_location: 0
+  num_scaled_layers: 50
+
+autoencoder:
+  ae_dim: 512
+  lambda_reconstruction: 10
+  lambda_prediction: 1
+  lambda_id: 1
+  ae_nonlinearity: "leakyrelu"
+
+batch_size: 4_096
+seed: 21
+save_name: "mnist_model"
+save_dir: "/home/nsa325/work/koopmann/model_saves/scaling/"
+print_freq: 5

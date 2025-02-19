@@ -1,0 +1,22 @@
+model: 
+    out_features: 2
+    hidden_neurons: [10,8,6,3]
+
+optim: 
+    weight_decay: 1e-2
+    num_epochs: 5_000
+    learning_rate: 1e-3
+
+train_data: 
+    dataset_name: "LotusRootDataset"
+    num_samples: 3_000
+    split: "train"
+    torch_transform: null
+    seed: 42
+    negative_label: false
+
+seed: 0
+batch_size: 1_000
+print_freq: 500
+save_name: "lotusroot_model"
+save_dir: "/home/nsa325/work/koopmann/model_saves/"

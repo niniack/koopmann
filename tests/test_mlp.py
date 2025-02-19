@@ -27,8 +27,37 @@ def test_save_load_mlp(tmp_path):
 
     path = Path.joinpath(tmp_path, "autoencoder.safetensors")
     mlp.save_model(path)
-    mlp_loaded = MLP.load_model(file_path=path)
+    mlp_loaded, _ = MLP.load_model(file_path=path)
 
     testing.assert_close(
         mlp.modules[0].linear_layer.weight, mlp_loaded.modules[0].linear_layer.weight
     )
+
+
+def test_insert_mlp_layer(tmp_path):
+    mlp = MLP(
+        input_dimension=2,
+        output_dimension=2,
+        config=[8, 6],
+        nonlinearity="relu",
+        bias=True,
+    )
+
+    expanded_dim = 25
+    dummy_mlp = MLP(
+        input_dimension=2,
+        output_dimension=2,
+        config=[8, 6, expanded_dim, 6],
+        nonlinearity="relu",
+        bias=True,
+    )
+
+    insert_index = len(mlp.modules) - 1
+    mlp.insert_layer(index=insert_index, out_features=expanded_dim)
+    mlp.insert_layer(index=insert_index + 1)
+
+    assert mlp.full_config == dummy_mlp.full_config
+
+    path = Path.joinpath(tmp_path, "autoencoder.safetensors")
+    mlp.save_model(path)
+    mlp_loaded, _ = MLP.load_model(file_path=path)

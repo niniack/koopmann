@@ -18,7 +18,7 @@ from torchvision.transforms import Lambda, ToTensor
 
 
 class DatasetConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, arbitrary_types_allowed=True)
+    model_config = ConfigDict(extra="forbid", frozen=False, arbitrary_types_allowed=True)
     dataset_name: Literal[
         "YinYangDataset",
         "YinYangNoDotsBinaryDataset",

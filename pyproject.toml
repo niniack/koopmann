@@ -20,7 +20,6 @@ pydantic = "*"
 torcheval = "^0.0.7"
 pyyaml = "^6.0.2"
 tqdm = "^4.66.5"
-wandb = "^0.18.5"
 matrepr = "^1.0.1"
 einops = "^0.8.0"
 ruff = "^0.7.1"
@@ -37,10 +36,9 @@ typer = "^0.15.1"
 pyfonts = "^0.0.2"
 pillow = "^11.0.0"
 imageio = {extras = ["ffmpeg"], version = "^2.36.1"}
-giotto-tda = "^0.6.2"
-torchdiffeq = "^0.2.5"
 matplotlib = "^3.10.0"
 neural-collapse = {git = "https://github.com/rhubarbwu/neural-collapse.git"}
+wandb = "^0.19.6"
 
 [[tool.poetry.source]]
 name = "pytorch"
@@ -56,6 +54,9 @@ ruff = "*"
 ipykernel = "^6.29.5"
 matplotlib="*"
 seaborn="*"
+
+[tool.poetry.scripts]
+train_mlp = 'koopmann.scripts.train_mlp.train'
 
 [build-system]
 requires = ["poetry-core"]

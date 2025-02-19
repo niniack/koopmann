@@ -114,7 +114,7 @@ class Autoencoder(BaseTorchModel):
                     out_features=channel_dims[i][0],
                     nonlinearity=nonlinearity if (i != 0) else None,
                     bias=True,
-                    batchnorm=batchnorm,
+                    batchnorm=False,
                     hook=False,
                 )
             )
@@ -163,7 +163,7 @@ class Autoencoder(BaseTorchModel):
         phi_x = self._encode(x)
 
         # Reconstruct
-        x_recons = self.decoder(phi_x)
+        x_recons = self._decode(phi_x)
 
         ##########################################
         # If you like slow code, you'll enjoy this!
@@ -233,6 +233,7 @@ class Autoencoder(BaseTorchModel):
             nonlinearity=metadata["nonlinearity"],
             k=literal_eval(metadata["steps"]),
             batchnorm=literal_eval(metadata["batchnorm"]),
+            hidden_configuration=literal_eval(metadata["hidden_configuration"]),
             **kwargs,
         )
 

@@ -7,6 +7,8 @@ from torch import nn
 from torch.utils.data import DataLoader, Dataset
 from torcheval.metrics import MulticlassAccuracy
 
+from koopmann.models.utils import get_device
+
 
 def set_seed(seed: int) -> None:
     """Set a random seed for reproducibility across PyTorch, NumPy, and Python's `random` module.
@@ -35,11 +37,14 @@ def compute_model_accuracy(
     Returns:
         torch.Tensor: The computed accuracy as a tensor.
     """
+    model.eval()
     dataloader = DataLoader(dataset, batch_size=batch_size)
     metric = MulticlassAccuracy()
+    device = get_device()
 
     for batch in dataloader:
         input, target = batch
+        input, target = input.to(device), target.to(device)
         output = model(input)  # Avoid explicit `forward()` call; use `model()`
         metric.update(output, target.squeeze())  # Ensure target shape compatibility
 

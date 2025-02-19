@@ -1,9 +1,9 @@
 __all__ = ["MLP"]
 
-
 from ast import literal_eval
 from collections import OrderedDict
 from pathlib import Path
+from typing import Literal, Optional
 
 import torch.nn as nn
 from jaxtyping import Float
@@ -36,14 +36,14 @@ class MLP(BaseTorchModel):
         self.nonlinearity = nonlinearity
         nonlinearity = StringtoClassNonlinearity[nonlinearity].value
         self.bias = bias
-        full_config = [input_dimension, *config, output_dimension]
+        self.full_config = [input_dimension, *config, output_dimension]
 
-        layers = [None] * (len(full_config) - 1)
-        for i in range(len(full_config) - 1):
+        layers = [None] * (len(self.full_config) - 1)
+        for i in range(len(self.full_config) - 1):
             layers[i] = LinearLayer(
-                in_features=full_config[i],
-                out_features=full_config[i + 1],
-                nonlinearity=nonlinearity if not i == len(full_config) - 2 else None,
+                in_features=self.full_config[i],
+                out_features=self.full_config[i + 1],
+                nonlinearity=nonlinearity if not i == len(self.full_config) - 2 else None,
                 batchnorm=True,
                 bias=bias,
                 hook=False,
@@ -76,6 +76,46 @@ class MLP(BaseTorchModel):
                 )
 
         return activations
+
+    def insert_layer(
+        self,
+        index: int,
+        out_features: int = None,
+        nonlinearity: Optional[Literal["none"]] = None,
+    ):
+        # Get nonlinerity
+        if nonlinearity and nonlinearity == "none":
+            nonlinearity = None
+        elif nonlinearity:
+            nonlinearity = StringtoClassNonlinearity[nonlinearity].value
+        else:
+            nonlinearity = StringtoClassNonlinearity[self.nonlinearity].value
+
+        # Convert container to list
+        layers = list(self.modules)
+
+        # Configure new layer
+        in_features = layers[index - 1].out_features
+        if not out_features:
+            out_features = layers[index].in_features
+
+        # Convert container to list and insert
+        new_layer = LinearLayer(
+            in_features=in_features,
+            out_features=out_features,
+            nonlinearity=nonlinearity if not index == (len(layers) + 1) - 1 else None,
+            batchnorm=True,
+            bias=self.bias,
+            hook=False,
+        )
+        layers.insert(index, new_layer)
+
+        # Convert back to container
+        self._features = nn.Sequential(*layers)
+
+        # Update config
+        self.full_config.insert(index + 1, out_features)
+        self.config = self.full_config[1:-1]
 
     @classmethod
     def load_model(cls, file_path: str | Path):

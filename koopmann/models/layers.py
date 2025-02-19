@@ -147,6 +147,27 @@ class LinearLayer(Layer):
         if self._handle:
             self._handle.remove()
 
+    def remove_nonlinearity(self):
+        self._kwargs["nonlinearity"] = None
+        self.layers = nn.Sequential(
+            OrderedDict(
+                (name, layer)
+                for name, layer in self.layers.named_children()
+                if name != "nonlinearity"
+            )
+        )
+
+    def update_nonlinearity(self, nonlinearity, **kwargs):
+        self._kwargs["nonlinearity"] = nonlinearity
+        new_nonlinearity_layer = StringtoClassNonlinearity[nonlinearity].value
+        new_ordered_dict = OrderedDict()
+        for name, layer in self.layers.named_children():
+            if name == "nonlinearity":
+                continue
+            new_ordered_dict[name] = layer
+        new_ordered_dict["nonlinearity"] = new_nonlinearity_layer(**kwargs)
+        self.layers = nn.Sequential(new_ordered_dict)
+
     def forward(self, x):
         self._forward_activations = None
         x = x.flatten(start_dim=1)
@@ -156,148 +177,5 @@ class LinearLayer(Layer):
     def init_weights(module: nn.Module):
         if isinstance(module, nn.Linear):
             nn.init.kaiming_normal_(module.weight, nonlinearity="relu")
-            if module.bias is not None:
-                module.bias.data.fill_(0.01)
-
-
-#######################################################################################
-####################################### CONV2D ########################################
-#######################################################################################
-class Conv2DLayer(Layer):
-    """
-    Conv2D layer with the option for batch norm, an activation, a hook, and transpose.
-    """
-
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        kernel_size: int | tuple,
-        stride: int | tuple = 1,
-        padding: int | tuple = 0,
-        nonlinearity: str | nn.Module = None,
-        bias: bool = True,
-        batchnorm: bool = False,
-        hook: bool = False,
-        transpose: bool = False,
-    ):
-        super().__init__()
-
-        self.layers = nn.Sequential()
-
-        # Conv2D or ConvTranspose2D
-        if transpose:
-            self.layers.add_module(
-                "conv2d",
-                nn.ConvTranspose2d(
-                    in_channels=in_channels,
-                    out_channels=out_channels,
-                    kernel_size=kernel_size,
-                    stride=stride,
-                    padding=padding,
-                    output_padding=0,
-                    bias=bias,
-                ),
-            )
-        else:
-            self.layers.add_module(
-                "conv2d",
-                nn.Conv2d(
-                    in_channels=in_channels,
-                    out_channels=out_channels,
-                    kernel_size=kernel_size,
-                    stride=stride,
-                    padding=padding,
-                    bias=bias,
-                ),
-            )
-
-        # Batchnorm
-        if batchnorm:
-            self.layers.add_module("batchnorm", nn.BatchNorm2d(out_channels))
-
-        # Nonlinearity
-        if isinstance(nonlinearity, str):
-            nonlinearity = StringtoClassNonlinearity[nonlinearity].value
-
-        if nonlinearity:
-            self.layers.add_module("nonlinearity", nonlinearity())
-
-        self._kwargs = OrderedDict(
-            {
-                "in_channels": in_channels,
-                "out_channels": out_channels,
-                "kernel_size": kernel_size,
-                "stride": stride,
-                "padding": padding,
-                "nonlinearity": nonlinearity,
-                "bias": bias,
-                "hook": hook,
-                "transpose": transpose,
-            }
-        )
-
-        self._forward_activations: Tensor = None
-
-        # Hook
-        self._handle: RemovableHandle = None
-        if hook:
-            self.setup_hook()
-
-    @property
-    def kwargs(self) -> dict:
-        """Returns keyword arguments dictionary."""
-        return self._kwargs
-
-    @property
-    def in_channels(self) -> int:
-        """Returns input channels."""
-        return self._kwargs["in_channels"]
-
-    @property
-    def out_channels(self) -> int:
-        """Returns output channels."""
-        return self._kwargs["out_channels"]
-
-    @property
-    def conv_layer(self) -> nn.Module:
-        """Returns the Conv2D or ConvTranspose2D layer."""
-        return self.layers[0]
-
-    @property
-    def forward_activations(self) -> Tensor:
-        """Returns tensor of forward activations from hook."""
-        return self._forward_activations
-
-    @property
-    def is_hooked(self) -> bool:
-        """Returns boolean indicating whether layer has hook."""
-        return self._kwargs["hook"]
-
-    def setup_hook(self):
-        """Sets up a hook."""
-
-        def _hook(module, input, output):
-            self._forward_activations = output
-
-        self._kwargs["hook"] = True
-
-        layer = self.layers[-1]
-        self._handle = layer.register_forward_hook(_hook)
-
-    def remove_hook(self):
-        """Tears down the hook."""
-        self._kwargs["hook"] = False
-        if self._handle:
-            self._handle.remove()
-
-    def forward(self, x):
-        self._forward_activations = None
-        return self.layers(x)
-
-    @staticmethod
-    def init_weights(module: nn.Module):
-        if isinstance(module, (nn.Conv2d, nn.ConvTranspose2d)):
-            nn.init.kaiming_normal_(module.weight, nonlinearity="leaky_relu")
             if module.bias is not None:
                 module.bias.data.fill_(0.01)

@@ -122,8 +122,8 @@ def plot_eigenvalues(
         )
 
         # Set the axis limits
-        ax.set_xlim([-1.3, 1.3])
-        ax.set_ylim([-1.3, 1.3])
+        ax.set_xlim([-3, 3])
+        ax.set_ylim([-3, 3])
 
         # Set the ticks on both axes
         ax.set_xticks([-1, 0, 1])

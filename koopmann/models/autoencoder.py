@@ -75,7 +75,9 @@ class Autoencoder(BaseTorchModel):
             dims_list = [input_dimension, latent_dimension]
             dims_list = dims_list[:1] + hidden_configuration + dims_list[1:]
 
-            channel_dims = [(dims_list[i - 1], dims_list[i]) for i in range(1, len(dims_list))]
+            channel_dims = [
+                (dims_list[i - 1], dims_list[i]) for i in range(1, len(dims_list))
+            ]
 
         ################## ENCODER #################
         self._encoder = nn.Sequential()
@@ -114,7 +116,7 @@ class Autoencoder(BaseTorchModel):
                     out_features=channel_dims[i][0],
                     nonlinearity=nonlinearity if (i != 0) else None,
                     bias=True,
-                    batchnorm=False,
+                    batchnorm=batchnorm,
                     hook=False,
                 )
             )
@@ -141,7 +143,9 @@ class Autoencoder(BaseTorchModel):
     @property
     def modules(self) -> nn.Sequential:
         """Returns the autoencoder modules in a sequential container."""
-        return nn.Sequential(self._koopman_matrix, *(list(self._encoder) + list(self._decoder)))
+        return nn.Sequential(
+            self._koopman_matrix, *(list(self._encoder) + list(self._decoder))
+        )
 
     def _encode(self, x):
         ## Pre-encoder bias
@@ -207,7 +211,9 @@ class Autoencoder(BaseTorchModel):
         for i, layer in enumerate(self.features):
             if layer.is_hooked:
                 activations[i] = (
-                    layer.forward_activations if not detach else layer.forward_activations.detach()
+                    layer.forward_activations
+                    if not detach
+                    else layer.forward_activations.detach()
                 )
 
         return activations
@@ -306,5 +312,7 @@ class ExponentialKoopmanAutencoder(Autoencoder):
         )
 
         parametrize.register_parametrization(
-            self.koopman_matrix.linear_layer, "weight", MatrixExponential(k=k, dim=latent_dimension)
+            self.koopman_matrix.linear_layer,
+            "weight",
+            MatrixExponential(k=k, dim=latent_dimension),
         )

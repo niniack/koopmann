@@ -11,44 +11,87 @@ import torch
 import torch.nn as nn
 import torchvision
 import torchvision.transforms as transforms
+import torch.nn.functional as F
 from torcheval.metrics import MulticlassAccuracy
 
 from koopmann.data import DatasetConfig, MNISTDataset
 from koopmann.models import MLP, Autoencoder
 from koopmann.utils import compute_model_accuracy
 
-user = "nsa325"
+user = "gs4133"
+
+
+# def fgsm_attack(model, loss_fn, data, epsilon, target):
+#     """
+#     FGSM attack implementation
+#     """
+#     # Make data require gradients
+#     data.requires_grad = True
+
+#     # Forward pass
+#     outputs = model(data)
+
+#     # Calculate loss
+#     loss = loss_fn(outputs, target)
+
+#     # Get gradients
+#     loss.backward()
+
+#     # Collect gradients
+#     data_grad = data.grad.data
+
+#     # Create perturbation
+#     sign_data_grad = data_grad.sign()
+
+#     # Create adversarial example
+#     perturbed_data = data + epsilon * sign_data_grad
+
+#     # Clamp to ensure valid pixel range [0,1]
+#     perturbed_data = torch.clamp(perturbed_data, 0, 1)
+
+#     return perturbed_data
 
 
 def fgsm_attack(model, loss_fn, data, epsilon, target):
     """
-    FGSM attack implementation
+    Performs a single-step FGSM attack on the given data.
+    
+    Args:
+        model (nn.Module): The trained model to attack.
+        loss_fn (callable): The loss function used for the model.
+        data (torch.Tensor): The input data to be perturbed.
+        epsilon (float): The magnitude of the perturbation.
+        target (torch.Tensor): The target labels for the input data.
+    
+    Returns:
+        perturbed_data (torch.Tensor): The adversarially perturbed data.
     """
-    # Make data require gradients
-    data.requires_grad = True
+    # Make a copy so we don't modify the original data tensor in-place
+    adv_data = data.clone().detach().requires_grad_(True)
 
+    # Ensure gradients are zeroed out before the forward pass
+    model.zero_grad()
+    
     # Forward pass
-    outputs = model(data)
-
-    # Calculate loss
+    outputs = model(adv_data)
+    
+    # Compute the loss
     loss = loss_fn(outputs, target)
-
-    # Get gradients
+    
+    # Backward pass to compute gradients
     loss.backward()
-
-    # Collect gradients
-    data_grad = data.grad.data
-
-    # Create perturbation
-    sign_data_grad = data_grad.sign()
-
-    # Create adversarial example
-    perturbed_data = data + epsilon * sign_data_grad
-
-    # Clamp to ensure valid pixel range [0,1]
-    perturbed_data = torch.clamp(perturbed_data, 0, 1)
-
+    
+    # Collect the sign of the gradients
+    grad_sign = adv_data.grad.data.sign()
+    
+    # Generate the perturbed data
+    perturbed_data = adv_data + epsilon * grad_sign
+    
+    # Clamp the perturbed data to ensure valid pixel values in [0, 1]
+    perturbed_data = torch.clamp(perturbed_data, -0.42, 2.3)
+    
     return perturbed_data
+
 
 
 def visualize_results(results, save_path):
@@ -61,7 +104,10 @@ def visualize_results(results, save_path):
         results["autoencoder_accuracy"],
     ]
     labels = ["Original", "Adversarial", "Autoencoder Protected"]
+    
+    save_path = Path(f"/scratch/{user}/model_saves")
 
+  
     sns.barplot(x=labels, y=accuracies)
     plt.title(f"Accuracy Comparison (ε={results['epsilon']})")
     plt.ylabel("Accuracy (%)")
@@ -70,8 +116,8 @@ def visualize_results(results, save_path):
 
 
 def test_autoencoder_robustness(args):
-    data_root = Path(f"/scratch/{user}/datasets")
-    model_path = Path(f"/scratch/{user}/koopmann_model_saves")
+    data_root = Path(f"/scratch/{user}/data")
+    model_path = Path(f"/scratch/{user}/model_saves")
 
     # Device configuration
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -96,7 +142,7 @@ def test_autoencoder_robustness(args):
         )
         test_loader = torch.utils.data.DataLoader(
             dataset=test_dataset,
-            batch_size=1_024,
+            batch_size=10000,
             shuffle=False,
         )
         print(f"Successfully loaded dataset with {len(test_loader)} batches")
@@ -109,7 +155,7 @@ def test_autoencoder_robustness(args):
     try:
         # modify the file path
         autoencoder_path = (
-            model_path / "scaling/k_1_dim_1024_loc_0_autoencoder_mnist_model.safetensors"
+            model_path / "k_1_dim_1024_loc_0_autoencoder_mnist_model.safetensors"
         )
         mlp_path = model_path / "mnist_probed.safetensors"
 
@@ -187,7 +233,7 @@ def test_autoencoder_robustness(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--epsilon", type=float, default=0.1, help="Perturbation magnitude")
+    parser.add_argument("--epsilon", type=float, default=0.0, help="Perturbation magnitude")
 
     args = parser.parse_args()
 

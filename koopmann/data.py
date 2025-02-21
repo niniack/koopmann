@@ -372,7 +372,7 @@ class MNISTDataset(datasets.MNIST):
         seed=42,
         transform=None,  # Torch transforms, uses default MNIST transform if None
         target_transform=None,
-        root="/scratch/nsa325/datasets/",  # Dataset location
+        root="/scratch/gs4133/datasets/",  # Dataset location
     ):
         self.transform = transform or self.default_transform
         self.target_transform = target_transform
@@ -406,7 +406,7 @@ class BinaryMNISTDataset(MNISTDataset):
         config=None,
         seed=42,
         transform=None,  # Torch transforms, uses default MNIST transform if None
-        root="/scratch/nsa325/datasets/",  # Dataset location
+        root="/scratch/gs4133/datasets/",  # Dataset location
     ):
         target_transform = Lambda(lambda y: 0 if y == binarize_target else 1)
 
@@ -437,7 +437,7 @@ class FashionMNISTDataset(datasets.FashionMNIST):
         config=None,
         seed=42,
         transform=None,  # Torch transforms, uses default FashionMNIST transform if None
-        root="/scratch/nsa325/datasets/",  # Dataset location
+        root="/scratch/gs4133/datasets/",  # Dataset location
     ):
         self.transform = transform or self.default_transform
         train = True if config.split == "train" else False
@@ -469,7 +469,7 @@ class CIFAR10Dataset(datasets.CIFAR10):
         config=None,
         seed=42,
         transform=None,  # Torch transforms, uses default CIFAR-10 transform if None
-        root="/scratch/nsa325/datasets/",  # Dataset location
+        root="/scratch/gs4133/datasets/",  # Dataset location
     ):
         self.transform = transform or self.default_transform
         train = True if config.split == "train" else False

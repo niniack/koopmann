@@ -1,0 +1,27 @@
+probe: 
+    model_to_probe: "/scratch/nsa325/koopmann_model_saves/fashion_model.safetensors"
+
+optim: 
+    weight_decay: 1e-4
+    num_epochs: 30
+    learning_rate: 5e-3
+
+train_data: 
+    dataset_name: "FashionMNISTDataset"
+    num_samples: 60_000
+    split: "train"
+    torch_transform: null
+    seed: 42
+    negative_label: false
+
+wandb: 
+    use_wandb: true
+    entity: "nishantaswani"
+    project: "koopman_interp"
+
+seed: 0
+batch_size: 4_096
+print_freq: 1
+save_name: "fashion_probed"
+save_dir: "/scratch/nsa325/koopmann_model_saves/"
+task_type: "probe"

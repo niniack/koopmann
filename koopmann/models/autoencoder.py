@@ -1,7 +1,7 @@
 __all__ = [
     "Autoencoder",
     "ExponentialKoopmanAutencoder",
-    "MatrixExponential",
+    "LowRankKoopmanAutoencoder",
 ]
 
 import warnings
@@ -65,10 +65,9 @@ class Autoencoder(BaseTorchModel):
 
         # Set up autoencoder architecture
         if not hidden_configuration:
-            self.hidden_configuration = [input_dimension * 4]
+            self.hidden_configuration = None
             channel_dims = [
-                (input_dimension, input_dimension * 4),
-                (input_dimension * 4, latent_dimension),
+                (input_dimension, latent_dimension),
             ]
         else:
             self.hidden_configuration = hidden_configuration
@@ -193,6 +192,7 @@ class Autoencoder(BaseTorchModel):
         else:
             K_weight = self.koopman_matrix.linear_layer.weight
             K_effective_weight = torch.linalg.matrix_power(K_weight, k)
+            # NOTE: this K is transposed because of how torch handles matrix multiplication!
             x_k = phi_x @ K_effective_weight.T
             x_k = self._decode(x_k)
 
@@ -307,4 +307,60 @@ class ExponentialKoopmanAutencoder(Autoencoder):
 
         parametrize.register_parametrization(
             self.koopman_matrix.linear_layer, "weight", MatrixExponential(k=k, dim=latent_dimension)
+        )
+
+
+class LowRankFactorization(nn.Module):
+    """
+    Parameterizes a matrix to be of rank r by factoring it into two matrices.
+    Similar to how the Symmetric class ensures symmetry, this ensures low rank.
+    """
+
+    def __init__(self, n: int, r: int):
+        super().__init__()
+        self.n = n  # dimension of square matrix
+        self.r = r  # target rank
+
+    def forward(self, X):
+        # Use the first n*r elements of X for left factor and the rest for right factor
+        left = X[:, : self.r]  # Shape: n × r
+        right = X[:, self.r :].t()  # Shape: r × n  (after transpose)
+        return left @ right
+
+    def right_inverse(self, X):
+        # When someone assigns a matrix to the weight, decompose it via SVD
+        U, S, Vh = torch.linalg.svd(X)
+        left = U[:, : self.r] @ torch.diag(torch.sqrt(S[: self.r]))
+        right = torch.diag(torch.sqrt(S[: self.r])) @ Vh[: self.r, :]
+        # Return in the format our forward method expects
+        return torch.cat([left, right.t()], dim=1)
+
+
+class LowRankKoopmanAutoencoder(Autoencoder):
+    """
+    Autoencoder model.
+    """
+
+    def __init__(
+        self,
+        k: int,
+        input_dimension: int = 2,
+        latent_dimension: int = 4,
+        hidden_configuration: Optional[List[Int]] = None,
+        nonlinearity: str = "leakyrelu",
+        batchnorm: bool = False,
+    ):
+        super().__init__(
+            k,
+            input_dimension,
+            latent_dimension,
+            hidden_configuration,
+            nonlinearity,
+            batchnorm,
+        )
+
+        parametrize.register_parametrization(
+            self.koopman_matrix.linear_layer,
+            "weight",
+            LowRankFactorization(n=latent_dimension, r=5),
         )

@@ -14,6 +14,7 @@ from torch import linalg, optim
 from torch.nn.utils.parametrizations import _Orthogonal, orthogonal
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, ReduceLROnPlateau, StepLR
 from torch.utils.data import DataLoader
+from torchvision import transforms
 
 import wandb
 from koopmann.data import (
@@ -22,12 +23,18 @@ from koopmann.data import (
     get_dataset_class,
 )
 from koopmann.log import logger
-from koopmann.models import MLP, Autoencoder, ExponentialKoopmanAutencoder
+from koopmann.models import (
+    MLP,
+    Autoencoder,
+    ExponentialKoopmanAutencoder,
+    LowRankKoopmanAutoencoder,
+)
 from koopmann.models.utils import get_device
 from scripts.common import setup_config
 from scripts.train_ae.losses import (
     compute_k_prediction_loss,
     compute_latent_space_prediction_loss,
+    compute_sparsity_loss,
     compute_state_space_recons_loss,
 )
 
@@ -109,6 +116,7 @@ def eval_autoencoder(
     # Evaluate
     with torch.no_grad():
         for batch in test_loader:
+            # Prepare data
             input, label = batch
             input = input.to(device)
             label = label.to(device).squeeze()
@@ -117,8 +125,17 @@ def eval_autoencoder(
             _ = model(input)
             all_acts = model.get_fwd_activations()
 
+            # TODO: This is quick and dirty
+            ###############################################################
+            # Undo MNIST standardization: X_original = X_standardized * std + mean
+            input = input * 0.3081 + 0.1307
+
+            # Convert [0,1] range to [-1,1]
+            input = 2 * input - 1
+            ###############################################################
+
             if config.scale.scale_location == 0:
-                # Add the original inputs as part of `all_acts` (shift keys)
+                # Add the original inputs as part of `all_acts` and shift keys
                 temp_all_acts = OrderedDict()
                 temp_all_acts[0] = input.flatten(start_dim=1)
                 for key, val in all_acts.items():
@@ -180,6 +197,7 @@ def eval_autoencoder(
     avg_state_scaled_pred = total_scaled_state_pred / num_batches
     avg_raw_latent_pred = total_raw_latent_pred / num_batches
     avg_state_latent_pred = total_scaled_latent_pred / num_batches
+
     avg_replacement_error = total_replacement_error / num_batches
 
     # Log to wandb (or any other logger)
@@ -226,10 +244,10 @@ def train_one_epoch(
         grad_log_interval: Log gradients once every this many batches (if log_gradients_func is not None).
     """
 
-    state_pred_warmup_start = 5
+    state_pred_warmup_start = 0
     state_pred_warmup_end = 200
 
-    latent_pred_warmup_start = 5
+    latent_pred_warmup_start = 0
     latent_pred_warmup_end = 200
 
     # Get the scheduled weights for the prediction terms
@@ -259,6 +277,8 @@ def train_one_epoch(
     raw_latent_pred_loss_sum = 0.0
     scaled_latent_pred_loss_sum = 0.0
 
+    raw_sparsity_loss_sum = 0.0
+
     num_batches = len(train_loader)
 
     for batch_idx, (input, label) in enumerate(train_loader):
@@ -275,6 +295,15 @@ def train_one_epoch(
         # ----------------
         with torch.no_grad():
             _ = model.forward(input)
+
+        # TODO: This is quick and dirty
+        ###############################################################
+        # Undo MNIST standardization: X_original = X_standardized * std + mean
+        input = input * 0.3081 + 0.1307
+
+        # Convert [0,1] range to [-1,1]
+        input = 2 * input - 1
+        ###############################################################
 
         # Extract forward activations
         all_acts = model.get_fwd_activations()
@@ -315,12 +344,20 @@ def train_one_epoch(
             probed=probed,
         )
 
+        raw_sparsity_loss, _ = compute_sparsity_loss(
+            act_dict=first_last_acts,
+            autoencoder=autoencoder,
+            k=config.scale.num_scaled_layers,
+            probed=probed,
+        )
+
         # -- Combine final loss using the scaled losses
         #    But with our new "warmup" schedule for the prediction terms
         loss = (
-            config.autoencoder.lambda_reconstruction * scaled_recons_loss
+            config.autoencoder.lambda_reconstruction * raw_recons_loss
             + effective_state_pred_weight * scaled_state_pred_loss
             + effective_latent_pred_weight * raw_latent_pred_loss
+            # + raw_sparsity_loss
         )
 
         loss.backward()
@@ -342,6 +379,8 @@ def train_one_epoch(
         raw_latent_pred_loss_sum += raw_latent_pred_loss.item()
         scaled_latent_pred_loss_sum += scaled_latent_pred_loss.item()
 
+        raw_sparsity_loss_sum += raw_sparsity_loss.item()
+
     # ----------------
     # Compute Averages
     # ----------------
@@ -356,6 +395,8 @@ def train_one_epoch(
     avg_latent_pred_loss_raw = raw_latent_pred_loss_sum / num_batches
     avg_latent_pred_loss_scaled = scaled_latent_pred_loss_sum / num_batches
 
+    avg_sparsity_loss = raw_sparsity_loss_sum / num_batches
+
     return {
         "epoch_loss": epoch_combined_loss,
         "reconstruction_error": avg_recons_loss_raw,
@@ -364,6 +405,7 @@ def train_one_epoch(
         "state_pred_fvu": avg_state_pred_loss_scaled,
         "latent_pred_loss": avg_latent_pred_loss_raw,
         "latent_pred_fvu": avg_latent_pred_loss_scaled,
+        "sparsity_loss": avg_sparsity_loss,
         # For debugging, you might also want to log the
         # dynamic weights used this epoch:
         "effective_state_pred_weight": effective_state_pred_weight,
@@ -410,7 +452,7 @@ def main(config_path_or_obj: Optional[Path | str | Config] = None):
         "batchnorm": config.autoencoder.batchnorm,
     }
     if config.autoencoder.exp_param:
-        autoencoder = ExponentialKoopmanAutencoder(**autoencoder_kwargs).to(device)
+        autoencoder = LowRankKoopmanAutoencoder(**autoencoder_kwargs).to(device)
     else:
         autoencoder = Autoencoder(**autoencoder_kwargs).to(device)
 

@@ -39,6 +39,7 @@ imageio = {extras = ["ffmpeg"], version = "^2.36.1"}
 matplotlib = "^3.10.0"
 neural-collapse = {git = "https://github.com/rhubarbwu/neural-collapse.git"}
 wandb = "^0.19.6"
+foolbox = "^3.3.4"
 
 [[tool.poetry.source]]
 name = "pytorch"

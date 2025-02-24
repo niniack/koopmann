@@ -40,6 +40,7 @@ matplotlib = "^3.10.0"
 neural-collapse = {git = "https://github.com/rhubarbwu/neural-collapse.git"}
 wandb = "^0.19.6"
 foolbox = "^3.3.4"
+click = "^8.1.8"
 
 [[tool.poetry.source]]
 name = "pytorch"
@@ -57,7 +58,8 @@ matplotlib="*"
 seaborn="*"
 
 [tool.poetry.scripts]
-train_mlp = 'koopmann.scripts.train_mlp.train'
+adversarial = 'scripts.adv_attacks:main'
+
 
 [build-system]
 requires = ["poetry-core"]

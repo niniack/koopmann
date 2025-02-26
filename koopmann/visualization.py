@@ -75,6 +75,7 @@ def plot_eigenvalues(
     tile_size: int = 4,
     num_rows: int = -1,
     num_cols: int = -1,
+    axis: list[int] = [-3, 3],
 ):
     """
     Plot eigenvalues for a dictionary of tensors with tuple keys.
@@ -122,8 +123,8 @@ def plot_eigenvalues(
         )
 
         # Set the axis limits
-        ax.set_xlim([-3, 3])
-        ax.set_ylim([-3, 3])
+        ax.set_xlim(axis)
+        ax.set_ylim(axis)
 
         # Set the ticks on both axes
         ax.set_xticks([-1, 0, 1])

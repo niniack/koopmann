@@ -6,6 +6,28 @@ from torch import linalg
 from scripts.common import prepare_padded_acts_and_masks
 
 
+def linear_warmup(
+    epoch: int,
+    final_value: float,
+    end_epoch: int,
+    start_epoch: int = 0,
+) -> float:
+    """
+    Linearly scale from 0.0 to final_value across [start_epoch, end_epoch].
+    - If epoch < start_epoch: return 0.0
+    - If epoch >= end_epoch: return final_value
+    - Else: scale linearly
+    """
+    if epoch < start_epoch:
+        return 0.0
+    elif epoch >= end_epoch:
+        return final_value
+    else:
+        # Fraction of the way from start_epoch to end_epoch
+        alpha = (epoch - start_epoch) / float(end_epoch - start_epoch)
+        return alpha * final_value
+
+
 ########################## K-Step Loss (Latent Space) ##########################
 def compute_latent_space_prediction_loss(act_dict, autoencoder, k, probed) -> tuple:
     """
@@ -151,6 +173,76 @@ def _probing_recons_loss(act_dict, autoencoder) -> tuple:
     return avg_mse, avg_fvu
 
 
+########################## Eigenvalue Loss##########################
+def compute_eigenloss(act_dict, autoencoder, k, probed) -> tuple:
+    """
+    Highly optimized eigenvalue loss function that leverages the low-rank
+    parametrization of the Koopman matrix to compute eigenvalues efficiently.
+
+    This implementation correctly accesses the parametrization to extract
+    the matrix factors.
+    """
+    # Percentage of eigenvalues to penalize (top by magnitude)
+    TOP_EIGENVALUE_PERCENT = 0.7
+
+    # Get the Koopman matrix's linear layer
+    koopman_layer = autoencoder.koopman_matrix.linear_layer
+
+    # Get the dimension and rank
+    n = koopman_layer.weight.shape[0]  # Matrix dimension
+    r = autoencoder.rank  # Low rank value (assuming it's stored in the autoencoder)
+
+    # Method 1: Access through parametrizations module
+    try:
+        # Starting from PyTorch 1.12+, this is the correct way to access the original tensor
+        original = koopman_layer.parametrizations.weight.original
+        left = original[:, :r]  # Shape: n × r
+        right = original[:, r:].t()  # Shape: r × n (after transpose)
+    except (AttributeError, IndexError):
+        # Alternative approach: If the above fails, we can use a direct computation approach
+        # Since we know the matrix is low-rank, we can use the regular weight
+        # and perform SVD to recover equivalent factors
+
+        # Get the full Koopman matrix
+        koopman_weights = koopman_layer.weight
+
+        # Perform SVD to get the factors
+        U, S, Vh = torch.linalg.svd(koopman_weights, full_matrices=False)
+
+        # Take only the top r singular values/vectors
+        U_r = U[:, :r]
+        S_r = S[:r]
+        Vh_r = Vh[:r, :]
+
+        # Construct equivalent left and right factors
+        left = U_r @ torch.diag(torch.sqrt(S_r))
+        right = torch.diag(torch.sqrt(S_r)) @ Vh_r
+
+    # Compute the small matrix whose eigenvalues match the non-zero eigenvalues of K
+    small_matrix = right @ left  # Shape: r × r
+
+    # Compute eigenvalues of the small matrix
+    eigenvalues = torch.linalg.eigvals(small_matrix)  # Shape: [r]
+
+    # Sort by magnitude
+    eigenvalues_abs = torch.abs(eigenvalues)
+
+    # Select top percentage to penalize
+    num_top = max(1, int(TOP_EIGENVALUE_PERCENT * r))
+    _, top_indices = torch.topk(eigenvalues_abs, num_top)
+    top_eigenvalues = eigenvalues[top_indices]
+
+    # Calculate distance from target (1+0i)
+    target = torch.ones(1, device=eigenvalues.device, dtype=torch.complex64)
+    distances = torch.abs(top_eigenvalues - target)
+
+    # Compute the loss
+    static_eigen_loss = torch.mean(distances**2)
+
+    return (static_eigen_loss, static_eigen_loss)
+
+
+########################## Sparsity Loss##########################
 def compute_sparsity_loss(act_dict, autoencoder, k, probed) -> tuple:
     # Prepare padded activations (we don't need masks for latent space)
     padded_acts, _ = prepare_padded_acts_and_masks(act_dict, autoencoder)

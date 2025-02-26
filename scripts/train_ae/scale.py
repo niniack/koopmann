@@ -8,13 +8,9 @@ import fire
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.nn.utils.parametrize as parametrize
-from config_def import Config
-from torch import linalg, optim
-from torch.nn.utils.parametrizations import _Orthogonal, orthogonal
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, ReduceLROnPlateau, StepLR
+from config_def import Config, KoopmanParam
+from torch import optim
 from torch.utils.data import DataLoader
-from torchvision import transforms
 
 import wandb
 from koopmann.data import (
@@ -30,68 +26,46 @@ from koopmann.models import (
     LowRankKoopmanAutoencoder,
 )
 from koopmann.models.utils import get_device
+from scripts import adv_attacks
 from scripts.common import setup_config
 from scripts.train_ae.losses import (
+    compute_eigenloss,
     compute_k_prediction_loss,
     compute_latent_space_prediction_loss,
     compute_sparsity_loss,
     compute_state_space_recons_loss,
+    linear_warmup,
 )
 
 
-def linear_warmup(epoch: int, start_epoch: int, end_epoch: int, final_value: float) -> float:
-    """
-    Linearly scale from 0.0 to final_value across [start_epoch, end_epoch].
-    - If epoch < start_epoch: return 0.0
-    - If epoch >= end_epoch: return final_value
-    - Else: scale linearly
-    """
-    if epoch < start_epoch:
-        return 0.0
-    elif epoch >= end_epoch:
-        return final_value
-    else:
-        # Fraction of the way from start_epoch to end_epoch
-        alpha = (epoch - start_epoch) / float(end_epoch - start_epoch)
-        return alpha * final_value
-
-
+########################## EVAL CODE ##########################
 def eval_autoencoder(
-    config: Config,
     model: nn.Module,
     autoencoder: nn.Module,
+    test_loader: DataLoader,
+    config: Config,
     probed: bool,
     epoch: int,
 ) -> None:
     """
-    Evaluates the autoencoder on the test set.
+    Evaluates the autoencoder on the test set. Called at intervals.
 
     Args:
-        config: Configuration object with dataset info, scale info, etc.
         model: The frozen model from which we extract layer activations.
         autoencoder: The Koopman-based autoencoder we are evaluating.
+        test_loader: Data loader for test set.
+        config: Configuration object with dataset info, scale info, etc.
         probed: Whether we are in 'probed' mode or not (affects layer indexing).
         epoch: Current epoch (for logging steps in wandb).
     """
 
     # Put both models into eval mode
     model.eval()
-    model.hook_model()  # If needed
+    model.hook_model()
     autoencoder.eval()
 
-    # Create Test Dataset + DataLoader
-    cloned_ds_config = DatasetConfig(
-        dataset_name=config.train_data.dataset_name,
-        num_samples=config.train_data.num_samples,
-        split="test",
-        torch_transform=config.train_data.torch_transform,
-        seed=config.train_data.seed,
-        negative_label=config.train_data.negative_label,
-    )
-    DatasetClass = get_dataset_class(name=cloned_ds_config.dataset_name)
-    dataset = DatasetClass(config=cloned_ds_config)
-
-    test_loader = create_data_loader(dataset, batch_size=config.batch_size, global_seed=config.seed)
+    device = get_device()
+    num_batches = len(test_loader)
 
     # We will accumulate raw/scaled errors for reconstruction & prediction
     total_raw_recons = 0.0
@@ -109,9 +83,6 @@ def eval_autoencoder(
         pred_act = autoencoder(first_value, k=k).predictions[-1]  # shape: [batch, neurons]
         output = model.modules[last_index + 1 :](pred_act)
         return F.cross_entropy(output, label.long())
-
-    device = get_device()
-    num_batches = len(test_loader)
 
     # Evaluate
     with torch.no_grad():
@@ -172,6 +143,7 @@ def eval_autoencoder(
                 probed=probed,
             )
 
+            # Replacement error
             replacement_error = replace_activations_error(
                 autoencoder=autoencoder,
                 k=config.scale.num_scaled_layers,
@@ -197,10 +169,9 @@ def eval_autoencoder(
     avg_state_scaled_pred = total_scaled_state_pred / num_batches
     avg_raw_latent_pred = total_raw_latent_pred / num_batches
     avg_state_latent_pred = total_scaled_latent_pred / num_batches
-
     avg_replacement_error = total_replacement_error / num_batches
 
-    # Log to wandb (or any other logger)
+    # Log to wandb
     wandb.log(
         {
             "eval/recons_raw": avg_raw_recons,
@@ -213,6 +184,10 @@ def eval_autoencoder(
         },
         step=epoch,
     )
+
+
+def run_adv_attacks(data_path: str, model_path: str, ae_path: str):
+    return adv_attacks.main.callback(data_path, model_path, ae_path)
 
 
 ########################## TRAIN LOOP ##########################
@@ -243,26 +218,23 @@ def train_one_epoch(
         log_gradients_func: A function to log gradient norms, if desired.
         grad_log_interval: Log gradients once every this many batches (if log_gradients_func is not None).
     """
-
-    state_pred_warmup_start = 0
-    state_pred_warmup_end = 200
-
-    latent_pred_warmup_start = 0
-    latent_pred_warmup_end = 200
-
     # Get the scheduled weights for the prediction terms
     effective_state_pred_weight = linear_warmup(
         epoch=epoch,
-        start_epoch=state_pred_warmup_start,
-        end_epoch=state_pred_warmup_end,
+        end_epoch=config.optim.num_epochs,
         final_value=config.autoencoder.lambda_prediction,
     )
 
     effective_latent_pred_weight = linear_warmup(
         epoch=epoch,
-        start_epoch=latent_pred_warmup_start,
-        end_epoch=latent_pred_warmup_end,
+        end_epoch=config.optim.num_epochs,
         final_value=config.autoencoder.lambda_id,
+    )
+
+    effective_sparsity_weight = linear_warmup(
+        epoch=epoch,
+        end_epoch=config.optim.num_epochs,
+        final_value=0.0001,
     )
 
     # Accumulators for the final epoch metrics
@@ -290,9 +262,6 @@ def train_one_epoch(
         model.hook_model()
         optimizer.zero_grad()
 
-        # ----------------
-        # Forward pass through the frozen model
-        # ----------------
         with torch.no_grad():
             _ = model.forward(input)
 
@@ -316,13 +285,13 @@ def train_one_epoch(
                 temp_all_acts[key + 1] = val
             all_acts = temp_all_acts
 
-        # We'll only use first and last for reconstruction, etc.
+        # We only use first and last states
         last_index = -3 if probed else -2
         first_key, first_value = next(iter(all_acts.items()))
         last_key, last_value = list(all_acts.items())[last_index]
         first_last_acts = OrderedDict({first_key: first_value, last_key: last_value})
 
-        # Compute sub-losses (raw & scaled)
+        # Compute losses (raw & scaled)
         (raw_recons_loss, scaled_recons_loss) = compute_state_space_recons_loss(
             act_dict=first_last_acts,
             autoencoder=autoencoder,
@@ -344,20 +313,19 @@ def train_one_epoch(
             probed=probed,
         )
 
-        raw_sparsity_loss, _ = compute_sparsity_loss(
+        raw_sparsity_loss, _ = compute_eigenloss(
             act_dict=first_last_acts,
             autoencoder=autoencoder,
             k=config.scale.num_scaled_layers,
             probed=probed,
         )
 
-        # -- Combine final loss using the scaled losses
-        #    But with our new "warmup" schedule for the prediction terms
+        # NOTE: Uses effective weight based on linear warmup
         loss = (
             config.autoencoder.lambda_reconstruction * raw_recons_loss
             + effective_state_pred_weight * scaled_state_pred_loss
             + effective_latent_pred_weight * raw_latent_pred_loss
-            # + raw_sparsity_loss
+            # + effective_state_pred_weight * raw_sparsity_loss
         )
 
         loss.backward()
@@ -421,7 +389,7 @@ def main(config_path_or_obj: Optional[Path | str | Config] = None):
     # Device
     device = get_device()
 
-    # Load data
+    # Load train data
     dataset_config = config.train_data
     DatasetClass = get_dataset_class(name=dataset_config.dataset_name)
     dataset = DatasetClass(config=dataset_config)
@@ -429,16 +397,34 @@ def main(config_path_or_obj: Optional[Path | str | Config] = None):
         dataset, batch_size=config.batch_size, global_seed=config.seed
     )
 
+    # Load test data
+    cloned_ds_config = DatasetConfig(
+        dataset_name=config.train_data.dataset_name,
+        num_samples=config.train_data.num_samples,
+        split="test",
+        torch_transform=config.train_data.torch_transform,
+        seed=config.train_data.seed,
+        negative_label=config.train_data.negative_label,
+    )
+    dataset = DatasetClass(config=cloned_ds_config)
+    test_loader = create_data_loader(
+        dataset,
+        batch_size=config.batch_size,
+        global_seed=config.seed,
+    )
+
     # Load model
     if config.scale.model_with_probe:
-        model, _ = MLP.load_model(file_path=config.scale.model_with_probe)
+        model_path = config.scale.model_with_probe
+        model, _ = MLP.load_model(file_path=model_path)
         model.modules[-2].remove_nonlinearity()
         model.modules[-3].remove_nonlinearity()
         # model.modules[-3].update_nonlinearity("leakyrelu")
         model.to(device).eval()
         probed = True
     else:
-        model, _ = MLP.load_model(file_path=config.scale.model_to_scale)
+        model_path = config.scale.model_to_scale
+        model, _ = MLP.load_model(file_path=model_path)
         model.to(device).eval()
         probed = False
 
@@ -450,27 +436,31 @@ def main(config_path_or_obj: Optional[Path | str | Config] = None):
         "nonlinearity": config.autoencoder.ae_nonlinearity,
         "hidden_configuration": config.autoencoder.hidden_config,
         "batchnorm": config.autoencoder.batchnorm,
+        "rank": config.autoencoder.koopman_rank,
     }
-    if config.autoencoder.exp_param:
+    if config.autoencoder.koopman_param == KoopmanParam.exponential:
+        autoencoder = ExponentialKoopmanAutencoder(**autoencoder_kwargs).to(device)
+        flavor = config.autoencoder.koopman_param.value
+    elif config.autoencoder.koopman_param == KoopmanParam.lowrank:
         autoencoder = LowRankKoopmanAutoencoder(**autoencoder_kwargs).to(device)
+        flavor = f"{config.autoencoder.koopman_param.value}_{config.autoencoder.koopman_rank}"
     else:
         autoencoder = Autoencoder(**autoencoder_kwargs).to(device)
-
+        flavor = "standard"
     autoencoder.summary()
 
-    # Define optimiser and scheduler
+    # Define optimiser
     optimizer = optim.AdamW(
         params=list(autoencoder.parameters()),
         lr=config.optim.learning_rate,
         weight_decay=config.optim.weight_decay,
         betas=(0.9, 0.999) if not config.optim.betas else tuple(config.optim.betas),
     )
-
-    scheduler = StepLR(
-        optimizer,
-        step_size=80,  # decay every 50 epochs
-        gamma=0.7,  # multiply LR by this factor
-    )
+    # scheduler = StepLR(
+    #     optimizer,
+    #     step_size=80,  # decay every 50 epochs
+    #     gamma=0.7,  # multiply LR by this factor
+    # )
 
     # Loop over epochs
     for epoch in range(config.optim.num_epochs):
@@ -486,8 +476,7 @@ def main(config_path_or_obj: Optional[Path | str | Config] = None):
             epoch=epoch,
         )
 
-        # scheduler.step(losses["epoch_loss"])
-        scheduler.step()
+        # scheduler.step()
 
         # Log metrics
         if (epoch + 1) % config.print_freq == 0:
@@ -501,11 +490,17 @@ def main(config_path_or_obj: Optional[Path | str | Config] = None):
                     "state_pred_fvu": losses["state_pred_fvu"],
                     "latent_pred_loss": losses["latent_pred_loss"],
                     "latent_pred_fvu": losses["latent_pred_fvu"],
+                    "sparsity_loss": losses["sparsity_loss"],
                 },
                 step=epoch,
             )
             eval_autoencoder(
-                config=config, model=model, autoencoder=autoencoder, probed=probed, epoch=epoch
+                model=model,
+                autoencoder=autoencoder,
+                test_loader=test_loader,
+                config=config,
+                probed=probed,
+                epoch=epoch,
             )
 
         # Print loss
@@ -518,16 +513,34 @@ def main(config_path_or_obj: Optional[Path | str | Config] = None):
     # Save model
     if config.save_dir:
         os.makedirs(os.path.dirname(config.save_dir), exist_ok=True)
-        path = Path(
-            config.save_dir,
-            f"k_{config.scale.num_scaled_layers}_dim_{config.autoencoder.ae_dim}_loc_{config.scale.scale_location}_autoencoder_{config.save_name}.safetensors",
+        filename = (
+            f"dim_{config.autoencoder.ae_dim}_"
+            f"k_{config.scale.num_scaled_layers}_"
+            f"loc_{config.scale.scale_location}_"
+            f"{flavor}_"
+            f"autoencoder_{config.save_name}.safetensors"
         )
+        ae_path = Path(config.save_dir, filename)
         autoencoder.save_model(
-            path,
+            ae_path,
             dataset=dataset.name(),
             num_scaled=config.scale.num_scaled_layers,
             scale_location=config.scale.scale_location,
         )
+
+    # Adversarial attacks
+    attack_results = run_adv_attacks(str(dataset.root), str(model_path), str(ae_path))
+    for attack_name, methods in attack_results.items():
+        for method_name in methods:
+            for eps, acc in methods[method_name].items():
+                wandb.log(
+                    {
+                        "attack": attack_name,
+                        "method": method_name,
+                        "epsilon": eps,
+                        f"{attack_name}/{method_name}/accuracy": acc,
+                    }
+                )
 
     wandb.finish()
 

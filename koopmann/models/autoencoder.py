@@ -42,6 +42,7 @@ class Autoencoder(BaseTorchModel):
         hidden_configuration: Optional[List[Int]] = None,
         nonlinearity: str = "leakyrelu",
         batchnorm: bool = False,
+        rank: int = None,
     ):
         super().__init__()
 
@@ -55,6 +56,7 @@ class Autoencoder(BaseTorchModel):
         self.latent_dimension = latent_dimension
         self.steps = k
         self.batchnorm = batchnorm
+        self.rank = rank
 
         # Store random projections in a ModuleDict as non-trainable parameters
         self.random_projections = nn.ParameterDict()
@@ -234,7 +236,7 @@ class Autoencoder(BaseTorchModel):
             k=literal_eval(metadata["steps"]),
             batchnorm=literal_eval(metadata["batchnorm"]),
             hidden_configuration=literal_eval(metadata["hidden_configuration"]),
-            **kwargs,
+            rank=literal_eval(metadata["rank"]) ** kwargs,
         )
 
         # Load weights
@@ -252,6 +254,7 @@ class Autoencoder(BaseTorchModel):
             "nonlinearity": str(self.nonlinearity),
             "steps": str(self.steps),
             "batchnorm": str(self.batchnorm),
+            "rank": str(self.rank),
         }
 
         for key, value in kwargs.items():
@@ -343,6 +346,7 @@ class LowRankKoopmanAutoencoder(Autoencoder):
 
     def __init__(
         self,
+        rank: int,
         k: int,
         input_dimension: int = 2,
         latent_dimension: int = 4,
@@ -357,10 +361,11 @@ class LowRankKoopmanAutoencoder(Autoencoder):
             hidden_configuration,
             nonlinearity,
             batchnorm,
+            rank,
         )
 
         parametrize.register_parametrization(
             self.koopman_matrix.linear_layer,
             "weight",
-            LowRankFactorization(n=latent_dimension, r=5),
+            LowRankFactorization(n=latent_dimension, r=rank),
         )

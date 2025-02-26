@@ -1,3 +1,4 @@
+from enum import Enum
 from typing import List, Optional
 
 from pydantic import (
@@ -7,6 +8,7 @@ from pydantic import (
     NonNegativeInt,
     PositiveFloat,
     PositiveInt,
+    model_validator,
 )
 
 from koopmann.data import DatasetConfig
@@ -21,7 +23,7 @@ class WandBConfig(BaseModel):
 
 class OptimConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
-    num_epochs: PositiveInt
+    num_epochs: NonNegativeInt
     learning_rate: PositiveFloat
     weight_decay: NonNegativeFloat
     betas: list[PositiveFloat] | None = None
@@ -37,16 +39,32 @@ class ScaleConfig(BaseModel):
 
 
 # Autoencoder configuration
+class KoopmanParam(str, Enum):
+    exponential = "exponential"
+    lowrank = "lowrank"
+
+
 class AutoencoderConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     ae_dim: PositiveInt
     lambda_reconstruction: NonNegativeFloat
     lambda_prediction: NonNegativeFloat
     lambda_id: NonNegativeFloat
-    exp_param: bool
     batchnorm: bool
     hidden_config: List[PositiveInt]
+    koopman_param: Optional[KoopmanParam] = None
+    koopman_rank: Optional[int] = None
     ae_nonlinearity: Optional[str] = None
+
+    @model_validator(mode="after")
+    def val_koopman_rank(self) -> "AutoencoderConfig":
+        # Only validate koopman_rank when koopman_param is `lowrank`
+        if self.koopman_param == KoopmanParam.lowrank:
+            if self.koopman_rank is None or self.koopman_rank <= 0:
+                raise ValueError(
+                    "`koopman_rank` must be a positive integer when `koopman_param` is `lowrank`"
+                )
+        return self
 
 
 # Main Config class

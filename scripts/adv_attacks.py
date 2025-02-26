@@ -1,6 +1,7 @@
 import os
 import pdb
 from ast import literal_eval
+from copy import copy
 from pathlib import Path
 
 import click
@@ -24,32 +25,33 @@ from koopmann.models import (
     LowRankKoopmanAutoencoder,
 )
 from koopmann.models.utils import get_device, parse_safetensors_metadata
+from scripts.train_ae.config_def import KoopmanParam
 
 ############################
 USER = os.environ.get("USER")
-task = "mnist"
-scale_idx = "0"
-k = "1"
-dim = "1024"
-use_exponential = True
 ############################
 
 
 def load_MLP(mlp_path):
-    model, _ = MLP.load_model(mlp_path)
+    model, metadata = MLP.load_model(mlp_path)
     model.modules[-2].remove_nonlinearity()
     # model.modules[-3].update_nonlinearity("leakyrelu")
     model.modules[-3].remove_nonlinearity()
     model.eval().hook_model()
-    return model
+    return model, metadata
 
 
-def load_autoencoder(ae_path, use_exponential):
+def load_autoencoder(ae_path):
     # Parse metadata
     metadata = parse_safetensors_metadata(file_path=ae_path)
 
     # Choose model based on flag
-    AutoencoderClass = LowRankKoopmanAutoencoder if use_exponential else Autoencoder
+    if KoopmanParam.exponential.value in ae_path:
+        AutoencoderClass = ExponentialKoopmanAutencoder
+    elif KoopmanParam.lowrank.value in ae_path:
+        AutoencoderClass = LowRankKoopmanAutoencoder
+    else:
+        AutoencoderClass = Autoencoder
 
     # Instantiate model
     autoencoder = AutoencoderClass(
@@ -59,13 +61,14 @@ def load_autoencoder(ae_path, use_exponential):
         k=literal_eval(metadata["steps"]),
         batchnorm=literal_eval(metadata["batchnorm"]),
         hidden_configuration=literal_eval(metadata["hidden_configuration"]),
+        rank=literal_eval(metadata["rank"]),
     )
 
     # Load weights
     load_model(autoencoder, ae_path, device=get_device(), strict=True)
     autoencoder.eval()
 
-    return autoencoder
+    return autoencoder, metadata
 
 
 def load_dataset(mlp_path, data_path):
@@ -100,18 +103,21 @@ def load_dataset(mlp_path, data_path):
 )
 @click.option(
     "--ae_path",
-    default=f"/scratch/{USER}/koopmann_model_saves/scaling",
+    default=f"/scratch/{USER}/koopmann_model_saves/scaling/dim_1024_k_1_loc_0_lowrank_10_autoencoder_mnist_model.safetensors",
     # prompt=True,
     help="Autoencoder directory.",
     type=click.Path(exists=True),
 )
 def main(data_path, mlp_path, ae_path):
+    device = get_device()
+
     # Load MLP and Autoencoder
-    model = load_MLP(mlp_path)
-    ae_path = Path.joinpath(
-        Path(ae_path), f"k_{k}_dim_{dim}_loc_{scale_idx}_autoencoder_{task}_model.safetensors"
-    )
-    autoencoder = load_autoencoder(ae_path, use_exponential)
+    model, model_metadata = load_MLP(mlp_path)
+    model = model.to(device)
+
+    autoencoder, autoencoder_metadata = load_autoencoder(ae_path)
+    autoencoder = autoencoder.to(device)
+    k = int(autoencoder_metadata["steps"])
 
     # Load dataset
     dataset = load_dataset(mlp_path, data_path)
@@ -119,7 +125,7 @@ def main(data_path, mlp_path, ae_path):
 
     # Set up FoolBox
     normalize_transform = transforms.Lambda(lambda x: (x / (255 / 2)) - 1)
-    images, labels = normalize_transform(dataset.data), dataset.labels
+    images, labels = normalize_transform(dataset.data).to(device), dataset.labels.to(device)
     total_images = len(images)
     preprocessing = dict(mean=[images.mean()], std=[images.std()], axis=-1)
     fmodel = fb.PyTorchModel(model, bounds=(-1, 1), preprocessing=preprocessing)
@@ -132,12 +138,8 @@ def main(data_path, mlp_path, ae_path):
         # fb.attacks.LinfAdditiveUniformNoiseAttack(),
         # fb.attacks.LinfDeepFoolAttack(),
     ]
-    attack_summary = {attack.__class__.__name__: {"naive": {}, "koopman": {}} for attack in attacks}
     epsilons = [
         0.0,
-        0.001,
-        0.003,
-        0.005,
         0.01,
         0.03,
         0.1,
@@ -145,27 +147,44 @@ def main(data_path, mlp_path, ae_path):
         1.0,
     ]
 
-    # Loop through attacks
-    # attack_success = np.zeros((len(attacks), len(epsilons), len(images)), dtype=bool)
+    # Set up results
+    epsilon_summary = {epsilon: 0.0 for epsilon in epsilons}
+    attack_summary = {
+        attack.__class__.__name__: {
+            "naive": copy(epsilon_summary),
+            "koopman": copy(epsilon_summary),
+        }
+        for attack in attacks
+    }
 
+    # Loop through attacks
     for attack in attacks:
+        # Get attack name
         attack_name = attack.__class__.__name__
+
+        # Run attack on MLP
         _, clipped_adv, success = attack(fmodel, images, labels, epsilons=epsilons)
         assert success.shape == (len(epsilons), total_images)
-        num_successful_images = torch.sum((success == torch.ones_like(success)), axis=-1)
-        attack_summary[attack_name]["naive"] = 1 - (num_successful_images / total_images)
 
-        epsilon_tensor = torch.empty(size=(len(epsilons),))
+        # Compute per epsilon rate
+        num_successful_images = torch.sum((success == torch.ones_like(success)), axis=-1)
+        mlp_epsilon_rate = 1 - (num_successful_images / total_images)
+
+        # Run all epsilons on Koopman autoencoder
+        koopman_epsilon_rate = torch.empty(size=(len(epsilons),))
         for i, adv_tensor in enumerate(clipped_adv):
             koopman_metric = MulticlassAccuracy()
             autencoder_preds = autoencoder(adv_tensor, k=int(k)).predictions[-1]
-            mlp_koopman_output = model.modules[-2:](autencoder_preds)
-            koopman_metric.update(mlp_koopman_output, labels.squeeze())
-            epsilon_tensor[i] = koopman_metric.compute()
+            koopman_output = model.modules[-2:](autencoder_preds)
+            koopman_metric.update(koopman_output, labels.squeeze())
+            koopman_epsilon_rate[i] = koopman_metric.compute()
 
-        attack_summary[attack_name]["koopman"] = epsilon_tensor
+        # Store
+        for i, epsilon in enumerate(epsilons):
+            attack_summary[attack_name]["naive"][epsilon] = mlp_epsilon_rate[i].item()
+            attack_summary[attack_name]["koopman"][epsilon] = koopman_epsilon_rate[i].item()
 
-    rprint(attack_summary)
+    return attack_summary
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ train_data:
 
 optim:
   num_epochs: 200
-  learning_rate: 1e-3
+  learning_rate: 5e-4
   weight_decay: 1e-2
   betas: [0.9, 0.999]
 
@@ -24,15 +24,17 @@ wandb:
     project: "koopman_interp"
 
 autoencoder:
-  ae_dim: 2_048
+  ae_dim: 1_024
   hidden_config: []
   ae_nonlinearity: "leakyrelu"
   batchnorm: False
-  exp_param: False
   lambda_reconstruction: 1
-  lambda_prediction: 1e-1
-  lambda_id: 1e-5
-batch_size: 4_096
+  lambda_prediction: 0.05
+  lambda_id: 1
+  koopman_param: "lowrank"
+  koopman_rank: 50
+  
+batch_size: 2_048
 seed: 21
 task_type: "autoencoder"
 save_name: "fashion_model"

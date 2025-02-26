@@ -58,8 +58,7 @@ matplotlib="*"
 seaborn="*"
 
 [tool.poetry.scripts]
-adversarial = 'scripts.adv_attacks:main'
-
+attack = 'scripts.adv_attacks:main'
 
 [build-system]
 requires = ["poetry-core"]

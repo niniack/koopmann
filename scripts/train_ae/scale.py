@@ -313,12 +313,13 @@ def train_one_epoch(
             probed=probed,
         )
 
-        raw_sparsity_loss, _ = compute_eigenloss(
-            act_dict=first_last_acts,
-            autoencoder=autoencoder,
-            k=config.scale.num_scaled_layers,
-            probed=probed,
-        )
+        # raw_sparsity_loss, _ = compute_eigenloss(
+        #     act_dict=first_last_acts,
+        #     autoencoder=autoencoder,
+        #     k=config.scale.num_scaled_layers,
+        #     probed=probed,
+        # )
+        raw_sparsity_loss = torch.tensor(-1)
 
         # NOTE: Uses effective weight based on linear warmup
         loss = (

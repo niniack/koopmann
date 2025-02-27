@@ -292,6 +292,7 @@ class ExponentialKoopmanAutencoder(Autoencoder):
 
     def __init__(
         self,
+        rank: int,
         k: int,
         input_dimension: int = 2,
         latent_dimension: int = 4,
@@ -306,6 +307,7 @@ class ExponentialKoopmanAutencoder(Autoencoder):
             hidden_configuration,
             nonlinearity,
             batchnorm,
+            rank,
         )
 
         parametrize.register_parametrization(

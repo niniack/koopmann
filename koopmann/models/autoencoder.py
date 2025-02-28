@@ -215,7 +215,13 @@ class Autoencoder(BaseTorchModel):
         return activations
 
     @classmethod
-    def load_model(cls, file_path: str | Path, strict=True, **kwargs):
+    def load_model(
+        cls,
+        file_path: str | Path,
+        strict: bool = True,
+        remove_param: bool = True,
+        **kwargs,
+    ):
         """Load model."""
 
         # Assert path
@@ -223,10 +229,6 @@ class Autoencoder(BaseTorchModel):
 
         # Parse metadata
         metadata = parse_safetensors_metadata(file_path=file_path)
-
-        # # Stuff metadata
-        # for k, v in kwargs.items():
-        #     metadata[str(k)] = str(v)
 
         # Load base model
         model = cls(
@@ -236,11 +238,20 @@ class Autoencoder(BaseTorchModel):
             k=literal_eval(metadata["steps"]),
             batchnorm=literal_eval(metadata["batchnorm"]),
             hidden_configuration=literal_eval(metadata["hidden_configuration"]),
-            rank=literal_eval(metadata["rank"]) ** kwargs,
+            rank=literal_eval(metadata["rank"]),
+            **kwargs,
         )
 
         # Load weights
         load_model(model, file_path, device=get_device(), strict=strict)
+
+        # Remove parameterizations
+        if remove_param and torch.nn.utils.parametrize.is_parametrized(
+            model.koopman_matrix.linear_layer
+        ):
+            torch.nn.utils.parametrize.remove_parametrizations(
+                model.koopman_matrix.linear_layer, "weight"
+            )
 
         return model, metadata
 

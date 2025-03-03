@@ -8,11 +8,11 @@ import fire
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import wandb
 from config_def import Config, KoopmanParam
 from torch import optim
 from torch.utils.data import DataLoader
 
-import wandb
 from koopmann.data import (
     DatasetConfig,
     create_data_loader,
@@ -199,9 +199,7 @@ def train_one_epoch(
     optimizer: torch.optim.Optimizer,
     config: Config,
     probed: bool,
-    epoch: int,  # <-- We'll use the epoch in our warmup schedule
-    log_gradients_func: Optional[Callable] = None,
-    grad_log_interval: int = 100,
+    epoch: int,
 ) -> dict:
     """
     Trains for one epoch.
@@ -210,13 +208,11 @@ def train_one_epoch(
         model: The original model from which we extract layer activations.
         autoencoder: The Koopman-based autoencoder we are training.
         train_loader: DataLoader for the training set.
-        device: The device (CPU/GPU).
-        optimizer: Torch optimizer for the autoencoder parameters.
-        config: Configuration object containing hyperparams (lambdas, etc.).
-        probed: Whether we are in probed mode or not.
-        epoch: Current epoch number (for scheduling).
-        log_gradients_func: A function to log gradient norms, if desired.
-        grad_log_interval: Log gradients once every this many batches (if log_gradients_func is not None).
+        device: CPU/GPU.
+        optimizer: Torch optimizer.
+        config: Configuration object containing hyperparams.
+        probed: Whether we are using a probed model or not.
+        epoch: Current epoch number.
     """
     # Get the scheduled weights for the prediction terms
     effective_state_pred_weight = linear_warmup(
@@ -330,9 +326,6 @@ def train_one_epoch(
         )
 
         loss.backward()
-
-        if log_gradients_func is not None and (batch_idx % grad_log_interval == 0):
-            log_gradients_func(autoencoder, step=batch_idx)
 
         optimizer.step()
 

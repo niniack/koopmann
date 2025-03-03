@@ -104,7 +104,7 @@ class Autoencoder(BaseTorchModel):
             batchnorm=False,
             hook=False,
         )
-        eigeninit(self._koopman_matrix.linear_layer.weight, theta=0.3)
+        # eigeninit(self._koopman_matrix.linear_layer.weight, theta=0.3)
 
         ################## DECODER #################
         self._decoder = nn.Sequential()

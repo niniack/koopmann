@@ -1,5 +1,4 @@
 import os
-import pdb
 from copy import deepcopy
 from pathlib import Path
 from typing import Optional, Union
@@ -7,22 +6,6 @@ from typing import Optional, Union
 import fire
 import torch
 from config_def import Config
-from neural_collapse.accumulate import (
-    CovarAccumulator,
-    DecAccumulator,
-    MeanAccumulator,
-    VarNormAccumulator,
-)
-from neural_collapse.kernels import kernel_stats, log_kernel
-from neural_collapse.measure import (
-    clf_ncc_agreement,
-    covariance_ratio,
-    orthogonality_deviation,
-    self_duality_error,
-    similarities,
-    simplex_etf_error,
-    variability_cdnv,
-)
 from torch import nn, optim
 from torch.nn import Module
 from torch.optim import Optimizer
@@ -31,10 +14,10 @@ from torch.utils.data import DataLoader
 import wandb
 from koopmann.data import create_data_loader, get_dataset_class
 from koopmann.log import logger
-from koopmann.models import MLP
+from koopmann.models import MLP, ResMLP
 from koopmann.models.utils import get_device
 from koopmann.utils import compute_model_accuracy
-from scripts.common import setup_config
+from scripts.common import get_parameter_groups, setup_config
 
 
 def train_one_epoch(
@@ -46,18 +29,6 @@ def train_one_epoch(
     mse_criterion: Module,
     optimizer: Optimizer,
 ) -> float:
-    """Trains the model for one epoch and returns the average training loss.
-
-    Args:
-        model (Module): The PyTorch model to train.
-        train_loader (DataLoader): The DataLoader providing training batches.
-        device (torch.device): The device to run training on.
-        criterion (Module): The loss function.
-        optimizer (Optimizer): The optimizer for model updates.
-
-    Returns:
-        float: The average training loss for the epoch.
-    """
     model.train()
     ce_epoch = 0.0
     mse_epoch = 0.0
@@ -110,7 +81,11 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]]):
     dataset_config.split = original_split
 
     # Load model
-    original_model, _ = MLP.load_model(file_path=config.probe.model_to_probe)
+    if "residual" in config.probe.model_to_probe:
+        original_model, _ = ResMLP.load_model(file_path=config.probe.model_to_probe)
+    else:
+        original_model, _ = MLP.load_model(file_path=config.probe.model_to_probe)
+
     original_model.to(device).eval()
 
     # Clone model
@@ -123,18 +98,30 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]]):
 
     # Insert layers
     insert_index = len(original_model.modules) - 1
-    model.insert_layer(index=insert_index, out_features=784, nonlinearity="leakyrelu")
+    model.insert_layer(index=insert_index, out_features=512, nonlinearity="leakyrelu")
     model.insert_layer(index=insert_index + 1, nonlinearity="none")
     model.to(device)
 
     # Loss + optimizer
     ce_loss = nn.CrossEntropyLoss()
     mse_loss = nn.MSELoss()
-    optimizer = optim.AdamW(
-        params=model.parameters(),
-        lr=config.optim.learning_rate,
-        weight_decay=config.optim.weight_decay,
-    )
+    if config.optim.type.value == "adamw":
+        optimizer = optim.AdamW(
+            params=model.parameters(),
+            lr=config.optim.learning_rate,
+            weight_decay=config.optim.weight_decay,
+        )
+    elif config.optim.type.value == "sgd":
+        # Use the helper function to create parameter groups
+        param_groups = get_parameter_groups(model, config.optim.weight_decay)
+
+        optimizer = optim.SGD(
+            params=param_groups,
+            momentum=0.9,
+            lr=config.optim.learning_rate,
+        )
+    else:
+        raise NotImplementedError("Pick either 'sgd' or 'adamw'")
 
     # Training loop
     for epoch in range(config.optim.num_epochs):
@@ -176,7 +163,10 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]]):
     if config.save_dir:
         os.makedirs(os.path.dirname(config.save_dir), exist_ok=True)
 
-        model_path = Path(config.save_dir, f"{config.save_name}.safetensors")
+        save_name = config.save_name
+        if "residual" in config.probe.model_to_probe:
+            save_name = config.save_name + "_residual"
+        model_path = Path(config.save_dir, f"{save_name}.safetensors")
         model.save_model(model_path, dataset=dataset.name())
 
 

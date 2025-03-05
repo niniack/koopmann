@@ -1,3 +1,4 @@
+from enum import Enum
 from typing import Optional
 
 from pydantic import (
@@ -21,12 +22,19 @@ class WandBConfig(BaseModel):
 
 class ModelConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+    residual: bool
     out_features: PositiveInt
     hidden_neurons: list[PositiveInt]
 
 
+class OptimParam(str, Enum):
+    adamw = "adamw"
+    sgd = "sgd"
+
+
 class OptimConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+    type: OptimParam
     weight_decay: NonNegativeFloat
     num_epochs: PositiveInt | None = None
     learning_rate: PositiveFloat

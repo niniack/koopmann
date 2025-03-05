@@ -30,6 +30,7 @@ class ResidualBlock(nn.Module):
 
         self.dimension = dimension
         self.hook = hook
+        self.out_features = dimension
         self._forward_activations = None
         self._handle = None
 

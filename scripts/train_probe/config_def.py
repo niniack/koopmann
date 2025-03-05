@@ -1,3 +1,4 @@
+from enum import Enum
 from typing import Optional
 
 from pydantic import (
@@ -12,11 +13,6 @@ from pydantic import (
 from koopmann.data import DatasetConfig
 
 
-class ProbeConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    model_to_probe: str
-
-
 class WandBConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     use_wandb: bool
@@ -24,8 +20,19 @@ class WandBConfig(BaseModel):
     project: str | None = None
 
 
+class ProbeConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_to_probe: str
+
+
+class OptimParam(str, Enum):
+    adamw = "adamw"
+    sgd = "sgd"
+
+
 class OptimConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+    type: OptimParam
     weight_decay: NonNegativeFloat
     num_epochs: PositiveInt | None = None
     learning_rate: PositiveFloat

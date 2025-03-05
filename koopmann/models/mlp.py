@@ -27,6 +27,7 @@ class MLP(BaseTorchModel):
         config: list = [8],  # Number of neurons per hidden layer.
         nonlinearity: str = "relu",
         bias: bool = True,
+        batchnorm: bool = True,
     ):
         super().__init__()
 
@@ -36,6 +37,7 @@ class MLP(BaseTorchModel):
         self.nonlinearity = nonlinearity
         nonlinearity = StringtoClassNonlinearity[nonlinearity].value
         self.bias = bias
+        self.batchnorm = batchnorm
         self.full_config = [input_dimension, *config, output_dimension]
 
         layers = [None] * (len(self.full_config) - 1)
@@ -134,6 +136,7 @@ class MLP(BaseTorchModel):
             config=literal_eval(metadata["config"]),
             nonlinearity=metadata["nonlinearity"],
             bias=literal_eval(metadata["bias"]),
+            batchnorm=literal_eval(metadata["batchnorm"]),
         )
         model.train()
 
@@ -151,6 +154,7 @@ class MLP(BaseTorchModel):
             "config": str(self.config),
             "nonlinearity": str(self.nonlinearity),
             "bias": str(self.bias),
+            "batchnorm": str(self.batchnorm),
         }
 
         for key, value in kwargs.items():

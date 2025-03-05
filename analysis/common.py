@@ -1,5 +1,6 @@
 from typing import Optional, Union
 
+import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -32,6 +33,202 @@ def compare_model_autoencoder_acc(
     koopman_metric.update(koopman_output, labels.squeeze())
 
     return mlp_metric.compute(), koopman_metric.compute()
+
+
+def trajectories(model, dataloader, num_classes, samples_per_class=1, device="cpu"):
+    # Get tableau colors for class visualization
+    class_colors = sorted(list(mcolors.TABLEAU_COLORS.values()))
+
+    # Initialize data structures
+    activations_by_class = [[] for _ in range(num_classes)]  # Activations per class
+    inputs_by_class = [[] for _ in range(num_classes)]  # Data points per class
+    samples_collected = [0 for _ in range(num_classes)]  # Counter for points per class
+
+    # Collect activations for each class
+    for data, target in dataloader:
+        # Exit if we've collected enough samples from all classes
+        if sum(samples_collected) == -num_classes:
+            break
+
+        # Move data to device and get model activations
+        data, target = data.to(device), target.to(device)
+        _ = model(data)
+        activations = model.get_fwd_activations()
+        layer_outputs = list(activations.values())  # Layer activations
+
+        # Process each class
+        for class_idx in range(num_classes):
+            # Find samples of this class in the batch
+            class_mask = target == class_idx
+            num_samples = class_mask.sum()
+
+            # Skip if no matches or class already completed
+            if not num_samples:
+                continue
+            if samples_collected[class_idx] < 0:
+                continue
+
+            # Mark class as complete if we have enough samples
+            if samples_collected[class_idx] > samples_per_class:
+                samples_collected[class_idx] = -1
+                continue
+
+            # Update counter and collect activations
+            samples_collected[class_idx] += num_samples
+            activations_by_class[class_idx].append([layer[class_mask] for layer in layer_outputs])
+            inputs_by_class[class_idx].append(data[class_mask])
+
+    # Concatenate and limit samples per class
+    activations_by_class = [
+        [torch.cat(layer_data, dim=0)[:samples_per_class] for layer_data in list(zip(*class_data))]
+        for class_data in activations_by_class
+    ]
+    inputs_by_class = [
+        torch.cat(class_data, dim=0)[:samples_per_class] for class_data in inputs_by_class
+    ]
+
+    # Prepare for trajectory visualization
+    projection_vectors = []
+    need_projection_vectors = True
+
+    # Project and plot trajectories for each class
+    for class_idx in range(len(activations_by_class)):
+        trajectory_points = []
+
+        # Project each layer's activations to 2D
+        for layer_idx in range(len(activations_by_class[class_idx])):
+            layer_activations = activations_by_class[class_idx][layer_idx].reshape(
+                samples_per_class, -1
+            )
+            feature_dim = layer_activations.shape[1]
+
+            # Create projection vectors if needed
+            if need_projection_vectors:
+                vector_exists = False
+                for vectors in projection_vectors:
+                    if vectors.shape[1] == feature_dim:
+                        vector_exists = True
+                if not vector_exists:
+                    projection_vectors.append(torch.randn(2, feature_dim).to(device))
+
+            # Find matching projection vectors and project
+            for vectors in projection_vectors:
+                if vectors.shape[1] == feature_dim:
+                    projected_points = vectors @ layer_activations.T
+                    break
+            trajectory_points.append(projected_points)
+
+        # Convert points to numpy for plotting
+        trajectory_points = torch.stack(trajectory_points).detach().cpu().numpy()
+        need_projection_vectors = False
+
+        # Plot trajectories for each sample
+        for sample_idx in range(samples_per_class):
+            plt.plot(
+                trajectory_points[:, 0, sample_idx],
+                trajectory_points[:, 1, sample_idx],
+                marker="o",
+                color=class_colors[class_idx],
+                markersize=3,
+            )
+
+    plt.show()
+
+
+# credit to Elad Hoffer
+def remove_bn_params(bn_module):
+    bn_module.running_mean.fill_(0)
+    bn_module.running_var.fill_(1)
+    bn_module.register_parameter("weight", None)
+    bn_module.register_parameter("bias", None)
+    bn_module.removed = True
+
+
+def init_bn_params(bn_module):
+    bn_module.running_mean.fill_(0)
+    bn_module.running_var.fill_(1)
+    if bn_module.affine:
+        bn_module.weight.fill_(1)
+        bn_module.bias.fill_(0)
+
+
+def absorb_bn(module, bn_module, remove_bn=True, verbose=True, center=None):
+    with torch.no_grad():
+        if hasattr(bn_module, "removed"):
+            if bn_module.removed:
+                return
+
+        w = module.weight
+        if module.bias is None:
+            if isinstance(module, nn.Linear):
+                out_ch = module.out_features
+            else:
+                out_ch = module.out_channels
+
+            zeros = torch.zeros(out_ch, dtype=w.dtype, device=w.device)
+            bias = nn.Parameter(zeros)
+            module.register_parameter("bias", bias)
+        b = module.bias
+
+        if len(w.shape) == 2:
+            w_shape = [w.size(0), 1]
+        else:
+            if "Transpose" in str(type(module)):
+                w_shape = [1, w.size(1), 1, 1]
+            else:
+                w_shape = [w.size(0), 1, 1, 1]
+
+        if center == "self":
+            w.add(-w.mean(0, keepdim=True))
+            w.add(-w.mean(1, keepdim=True))
+
+        if hasattr(bn_module, "running_mean"):
+            b.add_(-bn_module.running_mean)
+        if hasattr(bn_module, "running_var"):
+            invstd = bn_module.running_var.clone().add_(bn_module.eps).pow_(-0.5)
+            w.mul_(invstd.view(w_shape))
+            b.mul_(invstd)
+
+        if hasattr(bn_module, "weight"):
+            w.mul_(bn_module.weight.view(w_shape))
+            b.mul_(bn_module.weight)
+        if hasattr(bn_module, "bias"):
+            b.add_(bn_module.bias)
+
+        if center == "bias":
+            w.add(-b.view(w_shape))
+
+        if remove_bn:
+            remove_bn_params(bn_module)
+        else:
+            init_bn_params(bn_module)
+
+        if verbose:
+            print("BN module %s was asborbed into layer %s" % (bn_module, module))
+
+
+def is_bn(m):
+    return isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.BatchNorm1d)
+
+
+def is_absorbing(m):
+    return isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d) or isinstance(m, nn.Linear)
+
+
+def is_id(m):
+    return isinstance(m, nn.Identity)
+
+
+def sab(model, prev=None, remove_bn=True, verbose=True, center=None):
+    with torch.no_grad():
+        for m in model.children():
+            if is_bn(m) and is_absorbing(prev):
+                absorb_bn(prev, m, remove_bn=remove_bn, verbose=verbose, center=center)
+            sab(m, remove_bn=remove_bn, verbose=verbose, center=center)
+            prev = m
+
+
+############################################################################################
 
 
 def randomevd(mm, d, k, l, its=0, device="cuda"):
@@ -71,15 +268,21 @@ def randomevd(mm, d, k, l, its=0, device="cuda"):
     R = Q.T @ mm(Q)
     R = (R + R.T) / 2
     D, S = torch.linalg.eigh(R, UPLO="U")
+
     V = Q @ S
     D, V = D[-k:], V[:, -k:]
     return D.flip(-1), V.flip(-1)
 
 
+# K = 10
+# L = 5
+# E = 5
+# ITS = 1
+# K = 30
 K = 30
 L = 20
 E = 5
-ITS = 50
+ITS = 20
 
 
 def randomsvd_each(J):
@@ -110,8 +313,7 @@ def randomsvd(J):
         # i = len(J) - j - 1
         i = j
         print("svding layer {}".format(i))
-        # U, S, V = randomsvd_each(J[i])
-        U, S, V = torch.svd_lowrank(J[i], q=K, niter=ITS)
+        U, S, V = randomsvd_each(J[i])
         Us.append(U)
         Ss.append(S)
         Vs.append(V)
@@ -121,26 +323,28 @@ def randomsvd(J):
 SVD = randomsvd
 
 
-def jacobian_torch(output, input, device):
+def trajectory(h, fh, title, device):
+    vecs = torch.randn(2, h[0].numel()).to(device)
+    zs = []
+    for i, x in enumerate(h):
+        z = vecs @ (h[i].view(-1, 1))
+        zs.append(z)
+    z = torch.cat(zs, dim=1).detach().cpu().numpy()
+    plt.plot(z[0], z[1])
+    plt.savefig(title + "projected.png")
+    plt.close()
+
+
+def jacobian(output, input, device):
     print(output.shape)
-    output_numel = output.numel()
-
-    # Pre-allocate list with correct size to avoid dynamic resizing
-    J = [None] * output_numel
-
-    for i in range(output_numel):
-        # Create one-hot vector
+    J = []
+    for i in range(output.numel()):
         I = torch.zeros_like(output)
-        # Convert flat index to multi-dimensional index using PyTorch
-        ind = torch.tensor(np.unravel_index(i, I.shape))
-        I[tuple(ind)] = 1.0
-
-        # Compute gradient
+        ind = np.unravel_index(i, I.shape)
+        I[ind] = 1
         j = grad(output, input, I, retain_graph=True)[0]
-
-        # Store gradient - no need to zero I[ind] since I is recreated each iteration
-        J[i] = j.flatten()
-
+        I[ind] = 0
+        J.append(j.flatten())
     return torch.stack(J, dim=0)
 
 
@@ -150,9 +354,9 @@ def plotsvals(h, fh, title=None, device="cuda", SVD=SVD, label="0"):
     pcolors = sorted(list(mcolors.TABLEAU_COLORS.values()))
     svr = 1
     if svr:
-        J = [jacobian_torch(fh[l], h[l - 1], device).cpu() for l in range(1, len(h))]
+        J = [jacobian(fh[l], h[l - 1], device).cpu() for l in range(1, len(h))]
     else:
-        J = [jacobian_torch(h[l], h[0], device).cpu() for l in range(1, len(h))]
+        J = [jacobian(h[l], h[0], device).cpu() for l in range(1, len(h))]
     U, S, V = SVD(J)
     S = torch.stack(S).cpu()
     J = [j.cpu() for j in J]
@@ -215,7 +419,7 @@ def plotsvals(h, fh, title=None, device="cuda", SVD=SVD, label="0"):
 
 def alignment(h, fh, title=None, device="cuda", JUSV=None, SVD=SVD, label="0"):
     if JUSV is None:
-        J = [jacobian_torch(fh[l], h[l - 1], device).cpu() for l in range(1, len(h))]
+        J = [jacobian(fh[l], h[l - 1], device).cpu() for l in range(1, len(h))]
         U, S, V = SVD(J)
         S = torch.stack(S).cpu()
     else:
@@ -274,141 +478,3 @@ def alignment(h, fh, title=None, device="cuda", JUSV=None, SVD=SVD, label="0"):
             a = ax.matshow(torch.abs(m).detach().cpu().numpy(), cmap="RdBu")
     plt.savefig(title + "VJU{}.png".format(label))
     plt.close()
-
-
-def is_bn(m):
-    return isinstance(m, nn.BatchNorm1d) or isinstance(m, nn.BatchNorm2d)
-
-
-def is_linear(m):
-    return isinstance(m, nn.Linear)
-
-
-def is_absorbing(m):
-    return isinstance(m, nn.Linear) or isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d)
-
-
-def remove_bn_params(bn_module):
-    """Remove parameters from a BatchNorm module by setting them to identity transform."""
-    with torch.no_grad():
-        bn_module.running_mean.fill_(0)
-        bn_module.running_var.fill_(1)
-        bn_module.register_parameter("weight", None)
-        bn_module.register_parameter("bias", None)
-        bn_module.eval()  # Set to eval mode to ensure it uses running stats
-        setattr(bn_module, "removed", True)  # Mark as removed
-
-
-def absorb_bn(module, bn_module, remove_bn=True, verbose=True):
-    """Absorb a BatchNorm module into a preceding Linear/Conv layer."""
-    with torch.no_grad():
-        if hasattr(bn_module, "removed") and bn_module.removed:
-            return
-
-        # Get weights and biases
-        w = module.weight
-        if module.bias is None:
-            # Create a bias if none exists
-            if isinstance(module, nn.Linear):
-                out_ch = module.out_features
-            else:  # Conv layer
-                out_ch = module.out_channels
-
-            zeros = torch.zeros(out_ch, dtype=w.dtype, device=w.device)
-            bias = nn.Parameter(zeros)
-            module.register_parameter("bias", bias)
-        b = module.bias
-
-        # Reshape for correct broadcasting
-        if len(w.shape) == 2:  # Linear layer
-            w_shape = [w.size(0), 1]
-        else:  # Conv layer
-            if "Transpose" in str(type(module)):
-                w_shape = [1, w.size(1), 1, 1]
-            else:
-                w_shape = [w.size(0), 1, 1, 1]
-
-        # Absorb BatchNorm parameters
-        if hasattr(bn_module, "running_mean"):
-            b.add_(-bn_module.running_mean)
-        if hasattr(bn_module, "running_var"):
-            invstd = bn_module.running_var.clone().add_(bn_module.eps).pow_(-0.5)
-            w.mul_(invstd.view(w_shape))
-            b.mul_(invstd)
-
-        if hasattr(bn_module, "weight") and bn_module.weight is not None:
-            w.mul_(bn_module.weight.view(w_shape))
-            b.mul_(bn_module.weight)
-
-        if hasattr(bn_module, "bias") and bn_module.bias is not None:
-            b.add_(bn_module.bias)
-
-        # Remove or initialize BatchNorm parameters
-        if remove_bn:
-            remove_bn_params(bn_module)
-
-        if verbose:
-            print(f"BN module {bn_module} was absorbed into layer {module}")
-
-
-def find_bn_and_preceding_layer(module):
-    """
-    Find BatchNorm layers and their preceding layers in a module.
-    Returns a list of (prev_layer, bn_layer) tuples.
-    """
-    absorb_pairs = []
-    prev_layer = None
-
-    # Handle the case where LinearLayer has internal BatchNorm
-    if hasattr(module, "bn") and module.bn is not None and is_absorbing(module.linear):
-        absorb_pairs.append((module.linear, module.bn))
-
-    # Recursively search for layers to absorb
-    for child in module.children():
-        # Check if this child has its own BatchNorm
-        if (
-            hasattr(child, "bn")
-            and child.bn is not None
-            and hasattr(child, "linear")
-            and is_absorbing(child.linear)
-        ):
-            absorb_pairs.append((child.linear, child.bn))
-
-        # Standard sequential checking
-        if prev_layer is not None and is_bn(child) and is_absorbing(prev_layer):
-            absorb_pairs.append((prev_layer, child))
-
-        # Recurse into child's children
-        child_pairs = find_bn_and_preceding_layer(child)
-        absorb_pairs.extend(child_pairs)
-
-        # Update previous layer (only if it's an absorbing type)
-        if is_absorbing(child) or is_bn(child):
-            prev_layer = child
-
-    return absorb_pairs
-
-
-def sequential_absorb_batchnorm(model, remove_bn=True, verbose=True):
-    """
-    Find and absorb all BatchNorm layers into their preceding layers across the model.
-
-    Args:
-        model: The model to process
-        remove_bn: Whether to remove the BatchNorm parameters after absorption
-        verbose: Whether to print information about absorbed layers
-
-    Returns:
-        The modified model with BatchNorm layers absorbed
-    """
-    # Find all BatchNorm and preceding layer pairs to absorb
-    absorb_pairs = find_bn_and_preceding_layer(model)
-
-    # Absorb each pair
-    for module, bn_module in absorb_pairs:
-        absorb_bn(module, bn_module, remove_bn=remove_bn, verbose=verbose)
-
-    if verbose:
-        print(f"Absorbed {len(absorb_pairs)} BatchNorm layers")
-
-    return model

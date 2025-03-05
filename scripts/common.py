@@ -16,6 +16,40 @@ from koopmann.utils import set_seed
 T = TypeVar("T", bound=BaseModel)
 
 
+def get_parameter_groups(model, weight_decay):
+    """
+    Separates parameters into groups with and without weight decay
+    without relying on model.modules.
+    """
+    decay = []
+    no_decay = []
+    bn_params = set()
+
+    # Recursive function to identify BatchNorm layers
+    def find_bn_parameters(module):
+        if isinstance(module, (torch.nn.BatchNorm1d, torch.nn.BatchNorm2d)):
+            bn_params.update(module.parameters())
+
+        # Use children() method to iterate through direct children
+        for child in module.children():
+            find_bn_parameters(child)
+
+    # Start recursive search from the model
+    find_bn_parameters(model)
+
+    # Categorize all parameters
+    for name, param in model.named_parameters():
+        if any(param is bn_param for bn_param in bn_params):
+            no_decay.append(param)
+        else:
+            decay.append(param)
+
+    return [
+        {"params": decay, "weight_decay": weight_decay},
+        {"params": no_decay, "weight_decay": 0.0},
+    ]
+
+
 def setup_config(
     config_path_or_obj: Optional[Union[Path, str, T]] = None, config_type: Type[T] = None
 ) -> T:

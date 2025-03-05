@@ -1,30 +1,30 @@
+# mlp.py
 __all__ = ["MLP"]
 
 from ast import literal_eval
 from collections import OrderedDict
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 
 import torch.nn as nn
 from jaxtyping import Float
-from safetensors.torch import load_model, save_model
 from torch import Tensor
 
-from koopmann.models.base import BaseTorchModel
-from koopmann.models.layers import LinearLayer
-from koopmann.models.utils import StringtoClassNonlinearity, get_device, parse_safetensors_metadata
+from .base import BaseTorchModel
+from .layers import LinearLayer
+from .utils import StringtoClassNonlinearity, get_device, parse_safetensors_metadata
 
 
 class MLP(BaseTorchModel):
     """
-    Multi-layer perceptron.
+    Multi-layer perceptron with improved architecture.
     """
 
     def __init__(
         self,
         input_dimension: int = 2,
         output_dimension: int = 2,
-        config: list = [8],  # Number of neurons per hidden layer.
+        config: List[int] = [8],  # Number of neurons per hidden layer
         nonlinearity: str = "relu",
         bias: bool = True,
         batchnorm: bool = True,
@@ -35,44 +35,47 @@ class MLP(BaseTorchModel):
         self.output_dimension = output_dimension
         self.config = config
         self.nonlinearity = nonlinearity
-        nonlinearity = StringtoClassNonlinearity[nonlinearity].value
         self.bias = bias
         self.batchnorm = batchnorm
         self.full_config = [input_dimension, *config, output_dimension]
 
-        layers = [None] * (len(self.full_config) - 1)
+        # Convert string nonlinearity to class
+        nonlinearity_module = (
+            StringtoClassNonlinearity[nonlinearity].value if nonlinearity else None
+        )
+
+        # Create layers
+        self._features = nn.Sequential()
+
         for i in range(len(self.full_config) - 1):
-            layers[i] = LinearLayer(
+            # For the last layer, don't apply nonlinearity
+            layer_nonlinearity = None if i == len(self.full_config) - 2 else nonlinearity_module
+
+            layer = LinearLayer(
                 in_features=self.full_config[i],
                 out_features=self.full_config[i + 1],
-                nonlinearity=nonlinearity if not i == len(self.full_config) - 2 else None,
-                batchnorm=True,
+                nonlinearity=layer_nonlinearity,
+                batchnorm=batchnorm,
                 bias=bias,
-                hook=False,
             )
-            layers[i].apply(LinearLayer.init_weights)
-        self._features = nn.Sequential(*layers)
+            layer.apply(LinearLayer.init_weights)
 
-    def hook_model(self) -> None:
-        # Remove all previous hooks
-        for layer in self.modules:
-            layer.remove_hook()
-
-        # Add back hooks
-        for layer in self.modules:
-            layer.setup_hook()
+            self._features.add_module(f"layer_{i}", layer)
 
     @property
     def modules(self) -> nn.Sequential:
+        """Returns the sequential container of layers."""
         return self._features
 
     def forward(self, x: Float[Tensor, "batch features"]) -> Tensor:
+        """Forward pass through the MLP."""
         return self.modules(x)
 
     def get_fwd_activations(self, detach=True) -> OrderedDict:
+        """Get forward activations from all hooked layers."""
         activations = OrderedDict()
-        for i, layer in enumerate(self.modules):
-            if layer.is_hooked:
+        for i, (name, layer) in enumerate(self._features.named_modules()):
+            if hasattr(layer, "is_hooked") and layer.is_hooked:
                 activations[i] = (
                     layer.forward_activations if not detach else layer.forward_activations.detach()
                 )
@@ -85,13 +88,14 @@ class MLP(BaseTorchModel):
         out_features: int = None,
         nonlinearity: Optional[Literal["none"]] = None,
     ):
-        # Get nonlinerity
+        """Insert a new layer at the specified index."""
+        # Get nonlinearity
         if nonlinearity and nonlinearity == "none":
-            nonlinearity = None
+            nonlinearity_module = None
         elif nonlinearity:
-            nonlinearity = StringtoClassNonlinearity[nonlinearity].value
+            nonlinearity_module = StringtoClassNonlinearity[nonlinearity].value
         else:
-            nonlinearity = StringtoClassNonlinearity[self.nonlinearity].value
+            nonlinearity_module = StringtoClassNonlinearity[self.nonlinearity].value
 
         # Convert container to list
         layers = list(self.modules)
@@ -101,53 +105,60 @@ class MLP(BaseTorchModel):
         if not out_features:
             out_features = layers[index].in_features
 
-        # Convert container to list and insert
+        # Create the new layer
         new_layer = LinearLayer(
             in_features=in_features,
             out_features=out_features,
-            nonlinearity=nonlinearity if not index == (len(layers) + 1) - 1 else None,
-            batchnorm=True,
+            nonlinearity=nonlinearity_module if index != len(layers) else None,
             bias=self.bias,
-            hook=False,
+            batchnorm=self.batchnorm,
         )
+        new_layer.apply(LinearLayer.init_weights)
+
+        # Insert the layer
         layers.insert(index, new_layer)
 
-        # Convert back to container
+        # Rebuild sequential container
         self._features = nn.Sequential(*layers)
 
-        # Update config
+        # Update configuration
         self.full_config.insert(index + 1, out_features)
         self.config = self.full_config[1:-1]
 
+    def remove_layer(self, index: int):
+        """Remove a layer at the specified index."""
+        # Update configuration
+        self.full_config = self.full_config[: index + 1] + self.full_config[index + 2 :]
+        self.config = self.full_config[1:-1]
+
+        # Remove from layers
+        layers = list(self._features)
+        layers.pop(index)
+
+        # Rebuild sequential container
+        self._features = nn.Sequential(*layers)
+
     @classmethod
-    def load_model(cls, file_path: str | Path):
-        """Load model."""
-
-        # Assert path
-        assert Path(file_path).exists(), f"Model file {file_path} does not exist."
-
+    def load_model(cls, file_path: Union[str, Path], **kwargs):
+        """Load model from a file."""
         # Parse metadata
         metadata = parse_safetensors_metadata(file_path=file_path)
 
-        # Load base model
-        model = cls(
-            input_dimension=literal_eval(metadata["input_dimension"]),
-            output_dimension=literal_eval(metadata["output_dimension"]),
-            config=literal_eval(metadata["config"]),
-            nonlinearity=metadata["nonlinearity"],
-            bias=literal_eval(metadata["bias"]),
-            batchnorm=literal_eval(metadata["batchnorm"]),
-        )
-        model.train()
+        # Prepare parameters
+        model_params = {
+            "input_dimension": literal_eval(metadata["input_dimension"]),
+            "output_dimension": literal_eval(metadata["output_dimension"]),
+            "config": literal_eval(metadata["config"]),
+            "nonlinearity": metadata["nonlinearity"],
+            "bias": literal_eval(metadata["bias"]),
+            "batchnorm": literal_eval(metadata["batchnorm"]),
+        }
 
-        # Load weights
-        load_model(model, file_path, device=get_device())
+        # Use generic load method from base class
+        return cls.generic_load_model(file_path, model_params)
 
-        return model, metadata
-
-    def save_model(self, file_path: str | Path, **kwargs):
-        """Save model."""
-
+    def save_model(self, file_path: Union[str, Path], **kwargs):
+        """Save model to a file."""
         metadata = {
             "input_dimension": str(self.input_dimension),
             "output_dimension": str(self.output_dimension),
@@ -157,8 +168,9 @@ class MLP(BaseTorchModel):
             "batchnorm": str(self.batchnorm),
         }
 
+        # Add any additional metadata
         for key, value in kwargs.items():
             metadata[key] = str(value)
 
-        self.eval()
-        save_model(self, Path(file_path), metadata=metadata)
+        # Use generic save method from base class
+        self.generic_save_model(file_path, metadata)

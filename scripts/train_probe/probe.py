@@ -1,4 +1,5 @@
 import os
+import pdb
 from copy import deepcopy
 from pathlib import Path
 from typing import Optional, Union
@@ -42,7 +43,7 @@ def train_one_epoch(
 
         ce_loss = ce_criterion(output, label.long())
         mse_loss = mse_criterion(output, original_output)
-        loss = ce_loss + mse_loss
+        loss = ce_loss + 10 * mse_loss
         loss.backward()
 
         optimizer.step()
@@ -96,10 +97,14 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]]):
     for param in model.parameters():
         param.requires_grad = False
 
+    # Remove a block
+    insert_index = len(original_model.modules) - 2
+    model.remove_layer(index=insert_index)
+
     # Insert layers
-    insert_index = len(original_model.modules) - 1
-    model.insert_layer(index=insert_index, out_features=512, nonlinearity="leakyrelu")
-    model.insert_layer(index=insert_index + 1, nonlinearity="none")
+    model.insert_layer(index=insert_index, out_features=512, nonlinearity="relu")
+    model.insert_layer(index=insert_index + 1, nonlinearity="relu")
+
     model.to(device)
 
     # Loss + optimizer

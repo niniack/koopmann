@@ -172,6 +172,7 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]] = None):
             nonlinearity="relu",
             bias=False,
             batchnorm=True,
+            stochastic_depth_prob=0.3,
         )
     else:
         model = MLP(
@@ -207,8 +208,8 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]] = None):
     else:
         raise NotImplementedError("Pick either 'sgd' or 'adamw'")
 
-    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, config.optim.num_epochs)
-    scheduler = None
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, config.optim.num_epochs)
+    # scheduler = None
 
     # Training loop
     for epoch in range(config.optim.num_epochs):
@@ -220,7 +221,7 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]] = None):
             optimizer=optimizer,
         )
 
-        # scheduler.step()
+        scheduler.step()
 
         # with torch.no_grad():
         #     neural_collapse_metrics = compute_neural_collapse_metrics(

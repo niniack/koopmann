@@ -31,6 +31,8 @@ class ResMLP(BaseTorchModel):
         nonlinearity: str = "relu",
         bias: bool = True,
         batchnorm: bool = True,
+        stochastic_depth_prob: float = 0.0,  # Max probability for stochastic depth
+        stochastic_depth_mode: str = "batch",  # Mode for stochastic depth: "batch" or "row"
     ):
         super().__init__()
 
@@ -41,6 +43,8 @@ class ResMLP(BaseTorchModel):
         nonlinearity = StringtoClassNonlinearity[nonlinearity].value
         self.bias = bias
         self.batchnorm = batchnorm
+        self.stochastic_depth_prob = stochastic_depth_prob
+        self.stochastic_depth_mode = stochastic_depth_mode
         self.full_config = [input_dimension, *config, output_dimension]
 
         # Input projection layer (from input dimension to hidden dimension)
@@ -54,19 +58,29 @@ class ResMLP(BaseTorchModel):
         )
         input_layer.apply(LinearLayer.init_weights)
 
-        # Residual blocks
-        residual_blocks = nn.ModuleList(
-            [
-                ResidualBlock(
-                    dimension=self.full_config[i],
-                    nonlinearity=nonlinearity,
-                    bias=bias,
-                    batchnorm=batchnorm,
-                    hook=False,
-                )
-                for i in range(1, len(self.full_config) - 1)
-            ]
-        )
+        # Residual blocks with linearly increasing drop probability
+        num_blocks = len(self.full_config) - 2
+        residual_blocks = []
+
+        for i in range(1, len(self.full_config) - 1):
+            # Linear increase in drop probability with depth
+            # First block has near 0, last block has stochastic_depth_prob
+            if num_blocks > 1 and stochastic_depth_prob > 0:
+                block_index = i - 1
+                block_drop_prob = stochastic_depth_prob * block_index / (num_blocks - 1)
+            else:
+                block_drop_prob = 0.0
+
+            block = ResidualBlock(
+                dimension=self.full_config[i],
+                nonlinearity=nonlinearity,
+                bias=bias,
+                batchnorm=batchnorm,
+                hook=False,
+                drop_prob=block_drop_prob,
+                stoch_mode=stochastic_depth_mode,
+            )
+            residual_blocks.append(block)
 
         # Output projection layer (from hidden dimension to output dimension)
         output_layer = LinearLayer(
@@ -105,15 +119,12 @@ class ResMLP(BaseTorchModel):
 
     def get_fwd_activations(self, detach=True) -> OrderedDict:
         activations = OrderedDict()
-
         for i, layer in enumerate(self.modules):
-            if i == len(self.modules) - 1:
-                continue
-            elif isinstance(layer, ResidualBlock) and layer.is_hooked:
+            if isinstance(layer, ResidualBlock) and layer.is_hooked:
                 acts, patts = layer.forward_activations
-                activations[i + 1] = acts if not detach else acts.detach()
+                activations[i] = acts if not detach else acts.detach()
             elif layer.is_hooked:
-                activations[0] = (
+                activations[i] = (
                     layer.forward_activations if not detach else layer.forward_activations.detach()
                 )
 
@@ -170,7 +181,7 @@ class ResMLP(BaseTorchModel):
             in_features=in_features,
             out_features=out_features,
             nonlinearity=nonlinearity if not index == (len(layers) + 1) - 1 else None,
-            batchnorm=True,
+            batchnorm=False,
             bias=self.bias,
             hook=False,
         )
@@ -180,8 +191,18 @@ class ResMLP(BaseTorchModel):
         self._features = nn.Sequential(*layers)
 
         # Update config
-        self.full_config.insert(index + 1, out_features)
+        self.full_config.insert(index, out_features)
         self.config = self.full_config[1:-1]
+
+    def remove_layer(self, index):
+        # Update config
+        self.full_config = self.full_config[:index] + self.full_config[index + 1 :]
+        self.config = self.full_config[1:-1]
+
+        # Delete module
+        layers = list(self._features)
+        layers = layers[:index] + layers[index + 1 :]
+        self._features = nn.Sequential(*layers)
 
     @classmethod
     def load_model(cls, file_path: str | Path):
@@ -200,6 +221,8 @@ class ResMLP(BaseTorchModel):
             nonlinearity=metadata["nonlinearity"],
             bias=literal_eval(metadata["bias"]),
             batchnorm=literal_eval(metadata["batchnorm"]),
+            stochastic_depth_prob=literal_eval(metadata.get("stochastic_depth_prob", "0.0")),
+            stochastic_depth_mode=metadata.get("stochastic_depth_mode", "batch"),
         )
         model.train()
 
@@ -217,6 +240,8 @@ class ResMLP(BaseTorchModel):
             "nonlinearity": str(self.nonlinearity),
             "bias": str(self.bias),
             "batchnorm": str(self.batchnorm),
+            "stochastic_depth_prob": str(self.stochastic_depth_prob),
+            "stochastic_depth_mode": str(self.stochastic_depth_mode),
         }
 
         for key, value in kwargs.items():

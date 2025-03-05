@@ -1,10 +1,11 @@
 probe: 
-    model_to_probe: "/scratch/nsa325/koopmann_model_saves/mnist_model.safetensors"
+    model_to_probe: "/scratch/nsa325/koopmann_model_saves/mnist_model_residual.safetensors"
 
 optim: 
-    weight_decay: 1e-4
-    num_epochs: 30
-    learning_rate: 3e-3
+    type: "adamw"
+    weight_decay: 1e-1
+    num_epochs: 100
+    learning_rate: 1e-3
 
 train_data: 
     dataset_name: "MNISTDataset"
@@ -20,7 +21,7 @@ wandb:
     project: "koopman_interp"
 
 seed: 0
-batch_size: 16_384
+batch_size: 256
 print_freq: 1
 save_name: "mnist_probed"
 save_dir: "/scratch/nsa325/koopmann_model_saves/"

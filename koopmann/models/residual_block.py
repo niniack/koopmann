@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 from torch.utils.hooks import RemovableHandle
+from torchvision.ops import stochastic_depth  # Import the built-in function
 
 from koopmann.models.layers import Layer, LinearLayer
 from koopmann.models.utils import StringtoClassNonlinearity
@@ -15,7 +16,6 @@ class ResidualBlock(nn.Module):
     Residual block for ResMLP, consisting of two fully-connected layers.
     Following the paper, each residual block contains two fully-connected layers.
 
-    Intentionally preserves the exact same interface as the original implementation.
     """
 
     def __init__(
@@ -25,14 +25,19 @@ class ResidualBlock(nn.Module):
         bias: bool = False,
         batchnorm: bool = True,
         hook: bool = False,
+        drop_prob: float = 0.0,  # Probability for stochastic depth
+        stoch_mode: str = "batch",  # Mode for stochastic depth: "batch" or "row"
     ):
         super().__init__()
 
         self.dimension = dimension
         self.hook = hook
+        self.in_features = dimension
         self.out_features = dimension
         self._forward_activations = None
         self._handle = None
+        self.drop_prob = drop_prob
+        self.stoch_mode = stoch_mode
 
         # Create the residual branch
         if isinstance(nonlinearity, str):
@@ -106,6 +111,9 @@ class ResidualBlock(nn.Module):
 
         # Apply second layer without activation - using direct references as in original
         out = self.fc2(out)  # does not contain ReLU
+
+        # Apply stochastic depth using torchvision's implementation
+        out = stochastic_depth(out, p=self.drop_prob, mode=self.stoch_mode, training=self.training)
 
         # Add the identity connection
         out_with_skip = out + identity

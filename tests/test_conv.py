@@ -10,13 +10,13 @@ from koopmann.models.layers import Conv2DLayer
 @pytest.mark.parametrize("kernel_size", [3, (3, 3)])
 @pytest.mark.parametrize("stride", [1, 2])
 @pytest.mark.parametrize("padding", [0, 1])
-@pytest.mark.parametrize("nonlinearity", ["relu", nn.ReLU])
+@pytest.mark.parametrize("nonlinearity", ["relu", "leakyrelu", None])
 @pytest.mark.parametrize("bias", [True, False])
 @pytest.mark.parametrize("batchnorm", [True, False])
 def test_conv2d_inits(
     in_channels, out_channels, kernel_size, stride, padding, nonlinearity, bias, batchnorm
 ):
-    mod = Conv2DLayer(
+    layer = Conv2DLayer(
         in_channels=in_channels,
         out_channels=out_channels,
         kernel_size=kernel_size,
@@ -28,7 +28,7 @@ def test_conv2d_inits(
     )
 
     # Check dimension
-    assert mod.get_layer("conv").weight.shape == torch.Size(
+    assert layer.components.conv.weight.shape == torch.Size(
         [
             out_channels,
             in_channels,
@@ -39,56 +39,60 @@ def test_conv2d_inits(
 
     # Check nonlinearity
     if nonlinearity:
-        isinstance(mod.get_layer("nonlinearity"), nn.ReLU)
+        assert isinstance(layer.components.nonlinearity, nn.Module)
     else:
-        assert mod.get_layer("nonlinearity") is None
+        with pytest.raises(AttributeError):
+            _ = layer.components.nonlinearity
 
     # Check bias
     if bias:
-        assert mod.get_layer("conv").bias.shape == torch.Size([out_channels])
+        assert layer.components.conv.bias.shape == torch.Size([out_channels])
     else:
-        assert mod.get_layer("conv").bias is None
+        assert layer.components.conv.bias is None
 
     # Check batchnorm
     if batchnorm:
-        assert isinstance(mod.get_layer("batchnorm"), nn.BatchNorm2d)
+        assert isinstance(layer.components.batchnorm, nn.BatchNorm2d)
     else:
-        assert mod.get_layer("batchnorm") is None
+        with pytest.raises(AttributeError):
+            _ = layer.components.batchnorm
 
 
-def test_conv2d_setup_and_remove_hook():
+@pytest.mark.parametrize("bias", [True, False])
+@pytest.mark.parametrize("batchnorm", [True, False])
+def test_conv2d_setup_and_remove_hook(bias, batchnorm):
     batch_size = 10
     in_channels, out_channels = 3, 16
     height, width = 32, 32
-    mod = Conv2DLayer(
+    layer = Conv2DLayer(
         in_channels=in_channels,
         out_channels=out_channels,
         kernel_size=3,
         stride=1,
         padding=1,
         nonlinearity="relu",
-        bias=True,
-        batchnorm=True,
+        bias=bias,
+        batchnorm=batchnorm,
     )
 
     # Assert no hook
-    assert not mod.is_hooked
+    assert not layer.is_hooked
 
     # Hook
-    mod.setup_hook()
-    assert mod.is_hooked
+    layer.setup_hook()
+    assert layer.is_hooked
 
     # Check output and activations
     input = testing.make_tensor(
         (batch_size, in_channels, height, width), device="cpu", dtype=torch.float32
     )
-    output = mod(input)
-    testing.assert_close(mod.forward_activations, output)
+    output = layer(input)
+    testing.assert_close(layer.forward_activations, output)
 
     # Remove hook
-    mod.remove_hook()
-    assert not mod.is_hooked
+    layer.remove_hook()
+    assert not layer.is_hooked
 
     # Ensure no activations
-    _ = mod(input)
-    assert mod.forward_activations is None
+    _ = layer(input)
+    assert layer.forward_activations is None

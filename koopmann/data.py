@@ -51,6 +51,8 @@ def create_data_loader(
         dataset,  # type: ignore
         batch_size=batch_size,
         shuffle=shuffle,
+        pin_memory=True,  # This is critical
+        persistent_workers=True,
         num_workers=8,
     )
     return loader
@@ -460,7 +462,7 @@ class CIFAR10Dataset(datasets.CIFAR10):
             transforms.Normalize(
                 mean=(0.4914, 0.4822, 0.4465),  # Mean for CIFAR-10
                 std=(0.2470, 0.2435, 0.2616),  # Standard deviation for CIFAR-10
-            ),  # Normalize inputs
+            ),
         ]
     )
 

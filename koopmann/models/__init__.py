@@ -1,4 +1,5 @@
 from .autoencoder import *
 from .base import *
+from .conv_resnet import *
 from .mlp import *
-from .mlp_resnet import *
+from .res_mlp import *

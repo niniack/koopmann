@@ -1,6 +1,7 @@
 from koopmann.models import (
     MLP,
     Autoencoder,
+    ConvResNet,
     ExponentialKoopmanAutencoder,
     LowRankKoopmanAutoencoder,
     ResMLP,
@@ -29,22 +30,26 @@ def load_autoencoder(file_dir: str, ae_name: str):
     return autoencoder, ae_metadata
 
 
-def load_mlp(file_dir: str, model_name: str) -> tuple:
+def load_model(file_dir: str, model_name: str) -> tuple:
     """Hooked and in eval mode."""
     # Original model path
     model_file_path = f"{file_dir}/{model_name}.safetensors"
 
-    if "probed" in model_name:
+    lower_model_name = model_name.lower()
+
+    if "probed" in lower_model_name:
         model, model_metadata = MLP.load_model(file_path=model_file_path)
         model.modules[-2].remove_nonlinearity()
         model.modules[-3].remove_nonlinearity()
         # model.modules[-3].update_nonlinearity("leakyrelu")
+    elif "resnet" in lower_model_name:
+        model, model_metadata = ConvResNet.load_model(file_path=model_file_path)
     else:
-        if "residual" in model_name:
+        if "residual" in lower_model_name:
             model, model_metadata = ResMLP.load_model(file_path=model_file_path)
         else:
             model, model_metadata = MLP.load_model(file_path=model_file_path)
 
-    model.eval().hook_model()
+    model.eval()
 
     return model, model_metadata

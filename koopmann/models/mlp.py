@@ -1,115 +1,95 @@
 # mlp.py
 __all__ = ["MLP"]
 
-from ast import literal_eval
-from collections import OrderedDict
-from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Union
+import warnings
+from typing import Any, Dict, Optional
 
 import torch.nn as nn
 from jaxtyping import Float
 from torch import Tensor
 
-from .base import BaseTorchModel
-from .layers import LinearLayer
-from .utils import StringtoClassNonlinearity, get_device, parse_safetensors_metadata
+from koopmann.models.base import BaseTorchModel
+from koopmann.models.layers import LinearLayer
 
 
 class MLP(BaseTorchModel):
     """
-    Multi-layer perceptron with improved architecture.
+    Multi-layer perceptron.
+    NOTE: `hidden_config` defines the output dimension of the hidden linear layers
     """
 
     def __init__(
         self,
-        input_dimension: int = 2,
-        output_dimension: int = 2,
-        config: List[int] = [8],  # Number of neurons per hidden layer
-        nonlinearity: str = "relu",
+        in_features: int = 2,
+        out_features: int = 2,
+        hidden_config: list[int] = [8],
         bias: bool = True,
         batchnorm: bool = True,
+        nonlinearity: str = "relu",
     ):
         super().__init__()
 
-        self.input_dimension = input_dimension
-        self.output_dimension = output_dimension
-        self.config = config
-        self.nonlinearity = nonlinearity
+        self.in_features = in_features
+        self.out_features = out_features
+        self.hidden_config = hidden_config
         self.bias = bias
         self.batchnorm = batchnorm
-        self.full_config = [input_dimension, *config, output_dimension]
-
-        # Convert string nonlinearity to class
-        nonlinearity_module = (
-            StringtoClassNonlinearity[nonlinearity].value if nonlinearity else None
-        )
-
-        # Create layers
-        self._features = nn.Sequential()
+        self.nonlinearity = nonlinearity
+        self.full_config = [in_features, *hidden_config, out_features]
 
         for i in range(len(self.full_config) - 1):
-            # For the last layer, don't apply nonlinearity
-            layer_nonlinearity = None if i == len(self.full_config) - 2 else nonlinearity_module
+            # For the last layer, we don't use a nonlinearity
+            layer_nonlinearity = None if i == len(self.full_config) - 2 else nonlinearity
 
             layer = LinearLayer(
-                in_features=self.full_config[i],
-                out_features=self.full_config[i + 1],
-                nonlinearity=layer_nonlinearity,
-                batchnorm=batchnorm,
+                in_channels=self.full_config[i],
+                out_channels=self.full_config[i + 1],
                 bias=bias,
+                batchnorm=batchnorm,
+                nonlinearity=layer_nonlinearity,
             )
             layer.apply(LinearLayer.init_weights)
 
-            self._features.add_module(f"layer_{i}", layer)
-
-    @property
-    def modules(self) -> nn.Sequential:
-        """Returns the sequential container of layers."""
-        return self._features
+            self.components.add_module(f"linear_{i}", layer)
 
     def forward(self, x: Float[Tensor, "batch features"]) -> Tensor:
-        """Forward pass through the MLP."""
-        return self.modules(x)
-
-    def get_fwd_activations(self, detach=True) -> OrderedDict:
-        """Get forward activations from all hooked layers."""
-        activations = OrderedDict()
-        for i, (name, layer) in enumerate(self._features.named_modules()):
-            if hasattr(layer, "is_hooked") and layer.is_hooked:
-                activations[i] = (
-                    layer.forward_activations if not detach else layer.forward_activations.detach()
-                )
-
-        return activations
+        return self.components(x)
 
     def insert_layer(
         self,
         index: int,
-        out_features: int = None,
-        nonlinearity: Optional[Literal["none"]] = None,
+        in_channels: Optional[int] = None,
+        out_channels: Optional[int] = None,
+        nonlinearity: Optional[str] = None,
     ):
-        """Insert a new layer at the specified index."""
-        # Get nonlinearity
-        if nonlinearity and nonlinearity == "none":
-            nonlinearity_module = None
-        elif nonlinearity:
-            nonlinearity_module = StringtoClassNonlinearity[nonlinearity].value
-        else:
-            nonlinearity_module = StringtoClassNonlinearity[self.nonlinearity].value
+        """Insert a linear layer at the specified index."""
+        # Ensure we're not inserting at the boundaries
+        if index <= 0 or index >= len(self.components):
+            raise ValueError(
+                f"Cannot insert at position {index}. Must be between 1 and {len(self.components)-1}."
+            )
 
         # Convert container to list
-        layers = list(self.modules)
+        layers = list(self.components)
 
-        # Configure new layer
-        in_features = layers[index - 1].out_features
-        if not out_features:
-            out_features = layers[index].in_features
+        # Configure dimensions based on surrounding layers
+        if in_channels is None:
+            in_channels = layers[index - 1].out_channels
+        if out_channels is None:
+            out_channels = layers[index].in_channels
+
+        # Dimension validation
+        if (
+            in_channels != layers[index - 1].out_channels
+            or out_channels != layers[index].in_channels
+        ):
+            warnings.warn("Dimension mismatch may cause errors during forward pass")
 
         # Create the new layer
         new_layer = LinearLayer(
-            in_features=in_features,
-            out_features=out_features,
-            nonlinearity=nonlinearity_module if index != len(layers) else None,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            nonlinearity=nonlinearity,
             bias=self.bias,
             batchnorm=self.batchnorm,
         )
@@ -119,58 +99,45 @@ class MLP(BaseTorchModel):
         layers.insert(index, new_layer)
 
         # Rebuild sequential container
-        self._features = nn.Sequential(*layers)
+        self.components = nn.Sequential(*layers)
 
-        # Update configuration
-        self.full_config.insert(index + 1, out_features)
-        self.config = self.full_config[1:-1]
+        # Update configuration - adjust index for hidden_config (subtract 1 since hidden_config doesn't include input layer)
+        self.hidden_config.insert(index - 1, out_channels)
+        self.full_config = [self.in_features, *self.hidden_config, self.out_features]
 
     def remove_layer(self, index: int):
-        """Remove a layer at the specified index."""
-        # Update configuration
-        self.full_config = self.full_config[: index + 1] + self.full_config[index + 2 :]
-        self.config = self.full_config[1:-1]
+        """Remove a linear layer at the specified index."""
+        # Ensure we have enough layers and aren't removing boundaries
+        if len(self.components) <= 2:
+            raise ValueError("Cannot remove layer: minimum model size is 2 layers")
+
+        if index <= 0 or index >= len(self.components) - 1:
+            raise ValueError(
+                f"Cannot remove layer at position {index}. Must be between 1 and {len(self.components)-2}."
+            )
 
         # Remove from layers
-        layers = list(self._features)
-        layers.pop(index)
+        layers = list(self.components)
+        _ = layers.pop(index)
+
+        # Ensure connectivity after removal
+        if layers[index - 1].out_channels != layers[index].in_channels:
+            warnings.warn("Removing this layer may cause dimension mismatch during forward pass")
 
         # Rebuild sequential container
-        self._features = nn.Sequential(*layers)
+        self.components = nn.Sequential(*layers)
 
-    @classmethod
-    def load_model(cls, file_path: Union[str, Path], **kwargs):
-        """Load model from a file."""
-        # Parse metadata
-        metadata = parse_safetensors_metadata(file_path=file_path)
+        # Update configuration - adjust index for hidden_config
+        self.hidden_config.pop(index - 1)
+        self.full_config = [self.in_features, *self.hidden_config, self.out_features]
 
-        # Prepare parameters
-        model_params = {
-            "input_dimension": literal_eval(metadata["input_dimension"]),
-            "output_dimension": literal_eval(metadata["output_dimension"]),
-            "config": literal_eval(metadata["config"]),
-            "nonlinearity": metadata["nonlinearity"],
-            "bias": literal_eval(metadata["bias"]),
-            "batchnorm": literal_eval(metadata["batchnorm"]),
+    def _get_basic_metadata(self) -> Dict[str, Any]:
+        """Get model-specific metadata for serialization."""
+        return {
+            "in_features": self.in_features,
+            "out_features": self.out_features,
+            "hidden_config": self.hidden_config,
+            "bias": self.bias,
+            "batchnorm": self.batchnorm,
+            "nonlinearity": self.nonlinearity,
         }
-
-        # Use generic load method from base class
-        return cls.generic_load_model(file_path, model_params)
-
-    def save_model(self, file_path: Union[str, Path], **kwargs):
-        """Save model to a file."""
-        metadata = {
-            "input_dimension": str(self.input_dimension),
-            "output_dimension": str(self.output_dimension),
-            "config": str(self.config),
-            "nonlinearity": str(self.nonlinearity),
-            "bias": str(self.bias),
-            "batchnorm": str(self.batchnorm),
-        }
-
-        # Add any additional metadata
-        for key, value in kwargs.items():
-            metadata[key] = str(value)
-
-        # Use generic save method from base class
-        self.generic_save_model(file_path, metadata)

@@ -4,7 +4,7 @@ __all__ = ["ConvResNet"]
 from ast import literal_eval
 from collections import OrderedDict
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Tuple, Union
+from typing import List, Tuple
 
 import torch
 import torch.nn as nn
@@ -13,14 +13,18 @@ from safetensors.torch import load_model, save_model
 from torch import Tensor
 
 from .base import BaseTorchModel
-from .layers import Conv2DLayer, LayerType
+from .layers import Conv2DLayer
 from .residual_blocks import Conv2DResidualBlock
 from .utils import StringtoClassNonlinearity, get_device, parse_safetensors_metadata
+
+# convresnet.py
+__all__ = ["ConvResNet"]
 
 
 class ConvResNet(BaseTorchModel):
     """
     Convolutional Residual Network.
+    Designed to mimic the architecture from the reference implementation.
     """
 
     def __init__(
@@ -28,13 +32,14 @@ class ConvResNet(BaseTorchModel):
         in_channels: int = 3,
         out_channels: int = 10,  # Typically number of classes for classification
         input_size: Tuple[int, int] = (32, 32),  # Input image size (height, width)
-        channels_config: List[int] = [64, 128, 256],  # Number of channels per stage
-        blocks_per_stage: List[int] = [2, 2, 2],  # Number of residual blocks per stage
+        channels_config: List[int] = [64],  # Number of channels per stage
+        blocks_per_stage: List[int] = [8],  # Number of residual blocks per stage
         nonlinearity: str = "relu",
         bias: bool = True,
         batchnorm: bool = True,
         stochastic_depth_prob: float = 0.0,  # Max probability for stochastic depth
         stochastic_depth_mode: str = "batch",  # Mode for stochastic depth: "batch" or "row"
+        initial_downsample_factor: int = 1,  # Similar to 'pol' in reference
     ):
         super().__init__()
 
@@ -48,28 +53,43 @@ class ConvResNet(BaseTorchModel):
         self.batchnorm = batchnorm
         self.stochastic_depth_prob = stochastic_depth_prob
         self.stochastic_depth_mode = stochastic_depth_mode
+        self.initial_downsample_factor = initial_downsample_factor
 
         # Convert string nonlinearity to class
         nonlinearity_class = StringtoClassNonlinearity[nonlinearity].value
 
-        # Initial convolution layer
         self._features = nn.Sequential()
+
+        # Calculate parameters based on input size and downsample factor
+        kernel_size = 2 * self.initial_downsample_factor + 1
+        stride = self.initial_downsample_factor
+
+        # Determine padding based on input size (MNIST vs CIFAR)
+        if self.input_size[0] == 28:  # MNIST size
+            padding = kernel_size // 2 + 1
+        else:  # CIFAR or other sizes
+            padding = kernel_size // 2
+
+        # Calculate spatial dimensions after initial conv
+        nimsize = input_size[0] // initial_downsample_factor
+
+        # Calculate pooling kernel size as in original
+        pos = min(4, nimsize)
+
+        # Initial convolution layer with dynamic parameters
         self._features.add_module(
             "initial_conv",
             Conv2DLayer(
                 in_channels=in_channels,
                 out_channels=channels_config[0],
-                kernel_size=7,  # Typical initial kernel size
-                stride=2,  # Typical initial stride
-                padding=3,  # Same padding for 7x7 kernel
+                kernel_size=kernel_size,
+                stride=stride,
+                padding=padding,
                 nonlinearity=nonlinearity_class,
                 bias=bias,
                 batchnorm=batchnorm,
             ),
         )
-
-        # Max pooling after initial convolution
-        self._features.add_module("max_pool", nn.MaxPool2d(kernel_size=3, stride=2, padding=1))
 
         # Create stages with residual blocks
         current_channels = channels_config[0]
@@ -136,23 +156,32 @@ class ConvResNet(BaseTorchModel):
                     ),
                 )
 
-        # Global average pooling
-        self._features.add_module("global_avg_pool", nn.AdaptiveAvgPool2d((1, 1)))
+        # Average pooling based on architecture style
+        if len(channels_config) > 1:  # Multi-stage architecture (like conv=2)
+            # In the conv=2 case they use a fixed pooling size of 2
+            self._features.add_module("avg_pool", nn.AvgPool2d(2))
+            # Account for spatial reduction and doubling channels
+            feature_dim = channels_config[-1] * (nimsize // 2) ** 2
+        else:  # Single stage architecture (like conv=1)
+            # In the conv=1 case they use the calculated pool size
+            self._features.add_module("avg_pool", nn.AvgPool2d(pos))
+            # Account for spatial reduction
+            feature_dim = channels_config[-1] * (nimsize // pos) ** 2
 
         # Fully connected layer for final output
-        self._features.add_module("fc", nn.Linear(channels_config[-1], out_channels))
+        self._features.add_module("fc", nn.Linear(feature_dim, out_channels))
 
     def hook_model(self) -> None:
         """Set up activation hooks for all layers."""
         # Remove all previous hooks
-        for name, module in self._features.named_modules():
-            if hasattr(module, "remove_hook"):
-                module.remove_hook()
+        for mod in self._features:
+            if hasattr(mod, "remove_hook"):
+                mod.remove_hook()
 
         # Add back hooks
-        for name, module in self._features.named_modules():
-            if hasattr(module, "setup_hook"):
-                module.setup_hook()
+        for mod in self._features:
+            if hasattr(mod, "setup_hook"):
+                mod.setup_hook()
 
     @property
     def modules(self) -> nn.Sequential:
@@ -175,7 +204,7 @@ class ConvResNet(BaseTorchModel):
     def get_fwd_activations(self, detach=True) -> OrderedDict:
         """Get forward activations from all hooked layers."""
         activations = OrderedDict()
-        for i, (name, layer) in enumerate(self._features.named_modules()):
+        for i, layer in enumerate(self._features):
             if hasattr(layer, "is_hooked") and layer.is_hooked:
                 if isinstance(layer, Conv2DResidualBlock):
                     acts, patts = layer.forward_activations
@@ -194,7 +223,7 @@ class ConvResNet(BaseTorchModel):
         activations = OrderedDict()
         patterns = OrderedDict()
 
-        for i, (name, layer) in enumerate(self._features.named_modules()):
+        for i, layer in enumerate(self._features):
             if hasattr(layer, "is_hooked") and layer.is_hooked:
                 if isinstance(layer, Conv2DResidualBlock):
                     acts, patts = layer.forward_activations
@@ -231,6 +260,7 @@ class ConvResNet(BaseTorchModel):
             batchnorm=literal_eval(metadata["batchnorm"]),
             stochastic_depth_prob=literal_eval(metadata.get("stochastic_depth_prob", "0.0")),
             stochastic_depth_mode=metadata.get("stochastic_depth_mode", "batch"),
+            initial_downsample_factor=literal_eval(metadata.get("initial_downsample_factor", "1")),
         )
         model.train()
 
@@ -252,6 +282,7 @@ class ConvResNet(BaseTorchModel):
             "batchnorm": str(self.batchnorm),
             "stochastic_depth_prob": str(self.stochastic_depth_prob),
             "stochastic_depth_mode": str(self.stochastic_depth_mode),
+            "initial_downsample_factor": str(self.initial_downsample_factor),
         }
 
         for key, value in kwargs.items():

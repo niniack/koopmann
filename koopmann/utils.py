@@ -25,7 +25,7 @@ def set_seed(seed: int) -> None:
 def compute_model_accuracy(
     model: nn.Module,  # Neural network model
     dataset: Dataset,  # Dataset to evaluate
-    batch_size: Int = 256,  # Batch size for data loading
+    batch_size: Int = 1_024,  # Batch size for data loading
 ) -> torch.Tensor:
     """Computes the classification accuracy of a model on a given dataset.
 

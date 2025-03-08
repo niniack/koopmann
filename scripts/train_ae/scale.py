@@ -8,11 +8,11 @@ import fire
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import wandb
 from config_def import Config, KoopmanParam
 from torch import optim
 from torch.utils.data import DataLoader
 
-import wandb
 from koopmann.data import (
     DatasetConfig,
     create_data_loader,
@@ -28,7 +28,6 @@ from koopmann.models import (
 )
 from koopmann.models.utils import get_device
 from scripts import adv_attacks
-from scripts.common import setup_config
 from scripts.train_ae.eval import eval_autoencoder, run_adv_attacks
 from scripts.train_ae.losses import (
     compute_eigenloss,
@@ -38,6 +37,7 @@ from scripts.train_ae.losses import (
     compute_state_space_recons_loss,
     linear_warmup,
 )
+from scripts.utils import setup_config
 
 
 ########################## TRAIN LOOP ##########################
@@ -178,7 +178,7 @@ def build_and_load_model(config, device):
         model, _ = MLP.load_model(file_path=config.scale.model_with_probe)
         model.modules[-2].remove_nonlinearity()
         model.modules[-3].remove_nonlinearity()
-        # model.modules[-3].update_nonlinearity("leakyrelu")
+        # model.modules[-3].update_nonlinearity("leaky_relu")
         is_probed = True
     else:
         file_path = config.scale.model_to_scale

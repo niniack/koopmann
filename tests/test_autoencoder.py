@@ -4,7 +4,7 @@ import pytest
 import torch
 from torch import nn, testing
 
-from koopmann.models.autoencoder import KoopmanAutoencoder
+from koopmann.models.autoencoder import KoopmanAutoencoder, LowRankKoopmanAutoencoder
 
 
 @pytest.mark.parametrize("k_steps", [3, 8])
@@ -12,7 +12,7 @@ from koopmann.models.autoencoder import KoopmanAutoencoder
 @pytest.mark.parametrize("latent_features", [15, 20])
 @pytest.mark.parametrize("bias", [True, False])
 @pytest.mark.parametrize("batchnorm", [True, False])
-@pytest.mark.parametrize("nonlinearity", ["relu", "leakyrelu"])
+@pytest.mark.parametrize("nonlinearity", ["relu", "leaky_relu"])
 def test_init_autoencoder(k_steps, in_features, latent_features, bias, batchnorm, nonlinearity):
     autoencoder = KoopmanAutoencoder(
         k_steps=k_steps,
@@ -55,7 +55,7 @@ def test_save_load_autoencoder(tmp_path):
         latent_features=5,
         bias=True,
         batchnorm=True,
-        nonlinearity="leakyrelu",
+        nonlinearity="leaky_relu",
     )
 
     path = Path.joinpath(tmp_path, "autoencoder.safetensors")
@@ -63,3 +63,24 @@ def test_save_load_autoencoder(tmp_path):
     ae_loaded, _ = KoopmanAutoencoder.load_model(file_path=path)
 
     testing.assert_close(ae_loaded.koopman_weights, autoencoder.koopman_weights)
+
+
+def test_save_load_param_autoencoder(tmp_path):
+    rank = 1
+    autoencoder = LowRankKoopmanAutoencoder(
+        rank=1,
+        k_steps=2,
+        in_features=2,
+        latent_features=5,
+        bias=True,
+        batchnorm=True,
+        nonlinearity="leaky_relu",
+    )
+
+    path = Path.joinpath(tmp_path, "autoencoder.safetensors")
+    autoencoder.save_model(path)
+    ae_loaded, _ = LowRankKoopmanAutoencoder.load_model(file_path=path)
+
+    testing.assert_close(ae_loaded.koopman_weights, autoencoder.koopman_weights)
+
+    assert ae_loaded.rank == autoencoder.rank == rank

@@ -2,12 +2,21 @@ import random
 
 import numpy as np
 import torch
-from jaxtyping import Int
-from torch import nn
+from torch import device, nn
 from torch.utils.data import DataLoader, Dataset
 from torcheval.metrics import MulticlassAccuracy
 
-from koopmann.models.utils import get_device
+
+def get_device() -> device:
+    """Return fastest device."""
+
+    return (
+        "cuda"
+        if torch.cuda.is_available()
+        else "mps"
+        if torch.backends.mps.is_available()
+        else "cpu"
+    )
 
 
 def set_seed(seed: int) -> None:
@@ -23,24 +32,13 @@ def set_seed(seed: int) -> None:
 
 
 def compute_model_accuracy(
-    model: nn.Module,  # Neural network model
-    dataset: Dataset,  # Dataset to evaluate
-    batch_size: Int = 1_024,  # Batch size for data loading
+    model: nn.Module,
+    dataloader: DataLoader,
+    device,
 ) -> torch.Tensor:
-    """Computes the classification accuracy of a model on a given dataset.
-
-    Args:
-        model (nn.Module): The neural network model to evaluate.
-        dataset (Dataset): The dataset to compute accuracy on.
-        batch_size (Int, optional): The batch size for DataLoader. Defaults to 256.
-
-    Returns:
-        torch.Tensor: The computed accuracy as a tensor.
-    """
+    """Computes the classification accuracy of a model on a given dataset."""
     model.eval()
-    dataloader = DataLoader(dataset, batch_size=batch_size)
     metric = MulticlassAccuracy()
-    device = get_device()
 
     for batch in dataloader:
         input, target = batch

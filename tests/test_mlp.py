@@ -14,7 +14,7 @@ from koopmann.models.mlp import MLP
 @pytest.mark.parametrize("hidden_config", [[8], [8, 16], []])
 @pytest.mark.parametrize("bias", [True, False])
 @pytest.mark.parametrize("batchnorm", [True, False])
-@pytest.mark.parametrize("nonlinearity", ["relu", "leakyrelu"])
+@pytest.mark.parametrize("nonlinearity", ["relu", "leaky_relu"])
 def test_init_mlp(
     in_features,
     out_features,
@@ -81,7 +81,7 @@ def test_save_load_mlp(tmp_path):
         in_features=2,
         out_features=10,
         hidden_config=[8, 16],
-        nonlinearity="leakyrelu",
+        nonlinearity="leaky_relu",
         bias=True,
         batchnorm=False,
     )

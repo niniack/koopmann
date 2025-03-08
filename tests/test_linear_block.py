@@ -5,7 +5,7 @@ from koopmann.models.residual_blocks import LinearResidualBlock
 
 
 @pytest.mark.parametrize("dimension", [64, 128])
-@pytest.mark.parametrize("nonlinearity", ["relu", "leakyrelu"])
+@pytest.mark.parametrize("nonlinearity", ["relu", "leaky_relu"])
 @pytest.mark.parametrize("bias", [True, False])
 @pytest.mark.parametrize("batchnorm", [True, False])
 @pytest.mark.parametrize("drop_prob", [0.0, 0.3])

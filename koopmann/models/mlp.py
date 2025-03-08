@@ -5,7 +5,6 @@ import warnings
 from typing import Any, Dict, Optional
 
 import torch.nn as nn
-from jaxtyping import Float
 from torch import Tensor
 
 from koopmann.models.base import BaseTorchModel
@@ -52,7 +51,7 @@ class MLP(BaseTorchModel):
 
             self.components.add_module(f"linear_{i}", layer)
 
-    def forward(self, x: Float[Tensor, "batch features"]) -> Tensor:
+    def forward(self, x: Tensor) -> Tensor:
         return self.components(x)
 
     def insert_layer(

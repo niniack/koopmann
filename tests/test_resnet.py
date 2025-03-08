@@ -13,7 +13,7 @@ from koopmann.models.conv_resnet import ConvResNet
 @pytest.mark.parametrize("input_size", [(32, 32), (64, 64)])
 @pytest.mark.parametrize("channels_config", [[64, 128, 256], [32, 64, 128]])
 @pytest.mark.parametrize("blocks_per_stage", [[2, 2, 2], [1, 1, 1]])
-@pytest.mark.parametrize("nonlinearity", ["relu", "leakyrelu"])
+@pytest.mark.parametrize("nonlinearity", ["relu", "leaky_relu"])
 @pytest.mark.parametrize("bias", [True, False])
 @pytest.mark.parametrize("batchnorm", [True, False])
 @pytest.mark.parametrize("stochastic_depth_prob", [0.0, 0.3])

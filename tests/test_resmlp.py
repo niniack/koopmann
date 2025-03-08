@@ -13,7 +13,7 @@ from koopmann.models.residual_blocks import LinearResidualBlock
 @pytest.mark.parametrize("in_features", [2, 10])
 @pytest.mark.parametrize("out_features", [2, 5])
 @pytest.mark.parametrize("hidden_config", [[8], [8, 8]])
-@pytest.mark.parametrize("nonlinearity", ["relu", "leakyrelu"])
+@pytest.mark.parametrize("nonlinearity", ["relu", "leaky_relu"])
 @pytest.mark.parametrize("bias", [True, False])
 @pytest.mark.parametrize("batchnorm", [True, False])
 @pytest.mark.parametrize("stochastic_depth_prob", [0.0, 0.3])

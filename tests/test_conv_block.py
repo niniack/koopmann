@@ -7,7 +7,7 @@ from koopmann.models.residual_blocks import Conv2DResidualBlock
 @pytest.mark.parametrize("channels", [16, 32])
 @pytest.mark.parametrize("kernel_size", [3, 5])
 @pytest.mark.parametrize("stride", [1, 2])
-@pytest.mark.parametrize("nonlinearity", ["relu", "leakyrelu", None])
+@pytest.mark.parametrize("nonlinearity", ["relu", "leaky_relu", None])
 @pytest.mark.parametrize("bias", [True, False])
 @pytest.mark.parametrize("batchnorm", [True, False])
 @pytest.mark.parametrize("drop_prob", [0.0, 0.3])

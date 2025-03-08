@@ -1,9 +1,8 @@
 import pdb
 
 import torch
+import torch.nn.functional as F
 from torch import linalg
-
-from scripts.common import prepare_padded_acts_and_masks
 
 
 def linear_warmup(
@@ -259,3 +258,38 @@ def compute_sparsity_loss(act_dict, autoencoder, k, probed) -> tuple:
     total_l1 = l1_per_layer.sum()
 
     return total_l1, total_l1
+
+
+def pad_act(x, target_size):
+    current_size = x.size(1)
+    if current_size < target_size:
+        pad_size = target_size - current_size
+        x = F.pad(x, (0, pad_size), mode="constant", value=0)
+
+    return x
+
+
+def prepare_padded_acts_and_masks(act_dict, autoencoder):
+    """
+    Returns:
+      padded_acts: list of padded activation tensors (one per layer)
+      masks: list of 1/0 masks for ignoring "extra" neurons in padded activations
+    """
+
+    # Autoencoder input dimension
+    ae_input_size = autoencoder.encoder[0].in_features
+    padded_acts = []
+    masks = []
+
+    # Iterate through all activations
+    for act in act_dict.values():
+        # Pad activations
+        padded_act = pad_act(act, ae_input_size)
+        padded_acts.append(padded_act)
+
+        # Construct a mask that has '1' up to original size, then 0
+        mask = torch.zeros(ae_input_size, device=act.device)
+        mask[: act.size(-1)] = 1
+        masks.append(mask)
+
+    return padded_acts, masks

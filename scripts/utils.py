@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Optional, Type, TypeVar, Union
 
 import torch
-import torch.nn.functional as F
 import wandb
 import yaml
 from neural_collapse.accumulate import (
@@ -32,7 +31,7 @@ from koopmann.utils import set_seed
 T = TypeVar("T", bound=BaseModel)
 
 
-def get_parameter_groups(model, weight_decay):
+def separate_param_groups(model, weight_decay):
     """
     Separates parameters into groups with and without weight decay
     without relying on model.modules.
@@ -227,38 +226,3 @@ def compute_neural_collapse_metrics(model, config, train_loader, device):
     }
 
     return nc_results_dict
-
-
-def pad_act(x, target_size):
-    current_size = x.size(1)
-    if current_size < target_size:
-        pad_size = target_size - current_size
-        x = F.pad(x, (0, pad_size), mode="constant", value=0)
-
-    return x
-
-
-def prepare_padded_acts_and_masks(act_dict, autoencoder):
-    """
-    Returns:
-      padded_acts: list of padded activation tensors (one per layer)
-      masks: list of 1/0 masks for ignoring "extra" neurons in padded activations
-    """
-
-    # Autoencoder input dimension
-    ae_input_size = autoencoder.encoder[0].in_features
-    padded_acts = []
-    masks = []
-
-    # Iterate through all activations
-    for act in act_dict.values():
-        # Pad activations
-        padded_act = pad_act(act, ae_input_size)
-        padded_acts.append(padded_act)
-
-        # Construct a mask that has '1' up to original size, then 0
-        mask = torch.zeros(ae_input_size, device=act.device)
-        mask[: act.size(-1)] = 1
-        masks.append(mask)
-
-    return padded_acts, masks

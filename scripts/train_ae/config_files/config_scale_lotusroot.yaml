@@ -22,7 +22,7 @@ autoencoder:
   lambda_reconstruction: 5
   lambda_prediction: 1
   lambda_id: 1
-  ae_nonlinearity: "leakyrelu"
+  ae_nonlinearity: "leaky_relu"
 
 batch_size: 5_000
 seed: 21

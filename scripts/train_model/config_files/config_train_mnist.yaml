@@ -4,7 +4,7 @@ model:
     hidden_neurons: [512,512,512,512,512,512,512,512,512,512,512,512,512,512,512,512]
 
 optim: 
-    type: "sgd"
+    type: "adamw"
     weight_decay: 5e-2
     num_epochs: 100
     learning_rate: 1e-3

@@ -26,7 +26,7 @@ from koopmann.data import (
     get_dataset_class,
 )
 from koopmann.models import MLP, Autoencoder, ExponentialKoopmanAutencoder
-from koopmann.models.utils import get_device, pad_act, parse_safetensors_metadata
+from koopmann.models.utils import get_device, parse_safetensors_metadata
 
 
 def get_dataloader(model_file_path: str, batch_size: int = 5_000):

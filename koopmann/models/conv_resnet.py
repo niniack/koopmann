@@ -8,14 +8,15 @@ from typing import List, Tuple
 
 import torch
 import torch.nn as nn
-from jaxtyping import Float
 from safetensors.torch import load_model, save_model
 from torch import Tensor
 
-from .base import BaseTorchModel
-from .layers import Conv2DLayer
-from .residual_blocks import Conv2DResidualBlock
-from .utils import StringtoClassNonlinearity, get_device, parse_safetensors_metadata
+from koopmann.mixins.serializable import Serializable
+from koopmann.models.base import BaseTorchModel
+from koopmann.models.layers import Conv2DLayer
+from koopmann.models.residual_blocks import Conv2DResidualBlock
+from koopmann.models.utils import StringtoClassNonlinearity
+from koopmann.utils import get_device
 
 # convresnet.py
 __all__ = ["ConvResNet"]
@@ -188,7 +189,7 @@ class ConvResNet(BaseTorchModel):
         """Returns all modules in the model."""
         return self._features
 
-    def forward(self, x: Float[Tensor, "batch channels height width"]) -> Tensor:
+    def forward(self, x: Tensor) -> Tensor:
         """Forward pass through the ConvResNet."""
         for name, layer in self._features.named_children():
             if isinstance(layer, Conv2DResidualBlock):
@@ -246,7 +247,7 @@ class ConvResNet(BaseTorchModel):
         assert Path(file_path).exists(), f"Model file {file_path} does not exist."
 
         # Parse metadata
-        metadata = parse_safetensors_metadata(file_path=file_path)
+        metadata = Serializable.parse_safetensors_metadata(file_path=file_path)
 
         # Load base model
         model = cls(

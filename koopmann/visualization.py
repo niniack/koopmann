@@ -4,7 +4,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 import torch
-from jaxtyping import Float, Int
 from matplotlib.ticker import MaxNLocator
 from numpy import ndarray
 from torch import Tensor, nn

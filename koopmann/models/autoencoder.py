@@ -1,8 +1,8 @@
 __all__ = [
     "Autoencoder",
     "KoopmanAutoencoder",
-    # "ExponentialKoopmanAutencoder",
-    # "LowRankKoopmanAutoencoder",
+    "ExponentialKoopmanAutencoder",
+    "LowRankKoopmanAutoencoder",
 ]
 
 import warnings
@@ -11,10 +11,12 @@ from typing import Any, Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.utils.parametrize as parametrize
 from torch import Tensor
 
 from koopmann.models.base import BaseTorchModel
 from koopmann.models.layers import LinearLayer
+from koopmann.models.utils import eigeninit
 
 VanillaAutoencoderResult = namedtuple("VanillaAutoencoderResult", "latent reconstruction")
 KoopmanAutoencoderResult = namedtuple("KoopmanAutoencoderResult", "predictions reconstruction")
@@ -32,7 +34,7 @@ class Autoencoder(BaseTorchModel):
         hidden_config: Optional[list[int]] = None,
         bias: bool = True,
         batchnorm: bool = False,
-        nonlinearity: str = "leakyrelu",
+        nonlinearity: str = "leaky_relu",
     ):
         super().__init__()
 
@@ -129,6 +131,10 @@ class Autoencoder(BaseTorchModel):
 
 
 class KoopmanAutoencoder(Autoencoder):
+    """
+    Koopman autoencoder model.
+    """
+
     def __init__(
         self,
         k_steps: int,
@@ -137,7 +143,7 @@ class KoopmanAutoencoder(Autoencoder):
         hidden_config: Optional[list[int]] = None,
         bias: bool = True,
         batchnorm: bool = False,
-        nonlinearity: str = "leakyrelu",
+        nonlinearity: str = "leaky_relu",
         use_eigeninit: Optional[bool] = False,
     ):
         super().__init__(
@@ -210,164 +216,138 @@ class KoopmanAutoencoder(Autoencoder):
 
     def _get_basic_metadata(self) -> dict[str, Any]:
         """Get model-specific metadata for serialization."""
-        return {
-            "k_steps": self.k_steps,
-            "in_features": self.in_features,
-            "latent_features": self.latent_features,
-            "hidden_config": self.hidden_config,
-            "bias": self.bias,
-            "batchnorm": self.batchnorm,
-            "nonlinearity": self.nonlinearity,
-        }
+        metadata = super()._get_basic_metadata()
+        metadata.update(
+            {
+                "k_steps": self.k_steps,
+            }
+        )
+
+        return metadata
 
 
-def eigeninit(weight: torch.Tensor, theta: float = 0.7) -> None:
+class ExponentialKoopmanAutencoder(KoopmanAutoencoder):
     """
-    Initialization for Koopman matrix weights.
-
-    The magnitudes of the eigenvalues are set to be between 0 and 1,
-    with theta determining the probability of 1.
-    Directly modifies the input tensor `weight` in-place.
+    Koopman autoencoder model with exp parameterization.
     """
-    # Eigendecomposition
-    eigenvalues, eigenvectors = torch.linalg.eig(weight)
 
-    # Represent eigenvalues in polar coordinates
-    polar_mags = torch.abs(eigenvalues)
-    polar_phase = torch.angle(eigenvalues)
+    def __init__(
+        self,
+        k_steps: int,
+        in_features: int = 2,
+        latent_features: int = 4,
+        hidden_config: Optional[list[int]] = None,
+        bias: bool = True,
+        batchnorm: bool = False,
+        nonlinearity: str = "leaky_relu",
+        use_eigeninit: Optional[bool] = False,
+    ):
+        super().__init__(
+            k_steps,
+            in_features,
+            latent_features,
+            hidden_config,
+            bias,
+            batchnorm,
+            nonlinearity,
+            use_eigeninit,
+        )
 
-    # Sample with slab-spike distribution
-    num_unique = len(torch.unique(polar_mags, sorted=False))
-    bernoulli_trials = torch.distributions.Bernoulli(theta).sample([num_unique])
-    uniform_trials = torch.distributions.Uniform(0, 1).sample([num_unique]) * (1 - bernoulli_trials)
-    result_trials = bernoulli_trials + uniform_trials
-
-    # Sample new magnitudes, while preserving conjugate pairs!
-    new_polar_mags = torch.empty_like(polar_mags)
-    new_polar_mags[0] = result_trials[0]
-    j = 1
-    for i in range(1, new_polar_mags.size(0)):
-        if torch.isclose(polar_mags[i], polar_mags[i - 1]):
-            new_polar_mags[i] = new_polar_mags[i - 1]
-        else:
-            new_polar_mags[i] = result_trials[j]
-            j += 1
-
-    # Rebuild eigenvalues with new magnitudes
-    new_eigenvalues = torch.polar(new_polar_mags, polar_phase)
-
-    # Construct new weight matrix in-place
-    with torch.no_grad():  # Precaution
-        weight.copy_(
-            torch.real(eigenvectors @ torch.diag(new_eigenvalues) @ torch.linalg.inv(eigenvectors))
+        parametrize.register_parametrization(
+            self.components.koopman_matrix.components.linear,
+            "weight",
+            MatrixExponential(
+                k_steps=k_steps,
+                latent_features=latent_features,
+            ),
         )
 
 
-# class MatrixExponential(nn.Module):
-#     def __init__(self, k, dim):
-#         super().__init__()
-#         self.k = k  # Number of steps
-#         self.dim = dim
+class LowRankKoopmanAutoencoder(KoopmanAutoencoder):
+    """
+    Koopman autoencoder model with low rank parameterization.
+    """
 
-#     def forward(self, X):
-#         return torch.matrix_exp(X / self.k)  # Scale M by 1/k
+    def __init__(
+        self,
+        rank: int,
+        k_steps: int,
+        in_features: int = 2,
+        latent_features: int = 4,
+        hidden_config: Optional[list[int]] = None,
+        bias: bool = True,
+        batchnorm: bool = False,
+        nonlinearity: str = "leaky_relu",
+        use_eigeninit: Optional[bool] = False,
+    ):
+        super().__init__(
+            k_steps,
+            in_features,
+            latent_features,
+            hidden_config,
+            bias,
+            batchnorm,
+            nonlinearity,
+            use_eigeninit,
+        )
+        self.rank = rank
 
-#     # # Custom initialization function using matrix logarithm
-#     # def right_inverse(self, X):
-#     #     # Define a target matrix (e.g., an orthogonal matrix or one with specific eigenvalues)
-#     #     dummy_layer = nn.Linear(in_features=self.dim, out_features=self.dim)
-#     #     eigeninit(dummy_layer.weight, theta=1.0)
-#     #     target_matrix = dummy_layer.weight
+        parametrize.register_parametrization(
+            self.components.koopman_matrix.components.linear,
+            "weight",
+            LowRankFactorization(n=latent_features, r=rank),
+        )
 
-#     #     # Compute the matrix logarithm of the target matrix
-#     #     log_matrix = self.k * logm(target_matrix)
+    def _get_basic_metadata(self) -> dict[str, Any]:
+        """Get model-specific metadata for serialization."""
+        metadata = super()._get_basic_metadata()
+        metadata.update(
+            {
+                "rank": self.rank,
+            }
+        )
 
-#     #     return torch.Tensor(log_matrix)
-
-
-# class ExponentialKoopmanAutencoder(Autoencoder):
-#     """
-#     Autoencoder model.
-#     """
-
-#     def __init__(
-#         self,
-#         rank: int,
-#         k: int,
-#         input_dimension: int = 2,
-#         latent_dimension: int = 4,
-#         hidden_configuration: Optional[List[Int]] = None,
-#         nonlinearity: str = "leakyrelu",
-#         batchnorm: bool = False,
-#     ):
-#         super().__init__(
-#             k,
-#             input_dimension,
-#             latent_dimension,
-#             hidden_configuration,
-#             nonlinearity,
-#             batchnorm,
-#             rank,
-#         )
-
-#         parametrize.register_parametrization(
-#             self.koopman_matrix.linear_layer, "weight", MatrixExponential(k=k, dim=latent_dimension)
-#         )
+        return metadata
 
 
-# class LowRankFactorization(nn.Module):
-#     """
-#     Parameterizes a matrix to be of rank r by factoring it into two matrices.
-#     Similar to how the Symmetric class ensures symmetry, this ensures low rank.
-#     """
+class MatrixExponential(nn.Module):
+    def __init__(self, k_steps, latent_features):
+        super().__init__()
+        self.k_steps = k_steps  # Number of steps
+        self.latent_features = latent_features
 
-#     def __init__(self, n: int, r: int):
-#         super().__init__()
-#         self.n = n  # dimension of square matrix
-#         self.r = r  # target rank
+    def forward(self, X):
+        return torch.matrix_exp(X / self.k_steps)  # Scale M by 1/k
 
-#     def forward(self, X):
-#         # Use the first n*r elements of X for left factor and the rest for right factor
-#         left = X[:, : self.r]  # Shape: n × r
-#         right = X[:, self.r :].t()  # Shape: r × n  (after transpose)
-#         return left @ right
+    # # Custom initialization function using matrix logarithm
+    # def right_inverse(self, X):
+    #     # Define a target matrix (e.g., an orthogonal matrix or one with specific eigenvalues)
+    #     dummy_layer = nn.Linear(in_features=self.dim, out_features=self.dim)
+    #     eigeninit(dummy_layer.weight, theta=1.0)
+    #     target_matrix = dummy_layer.weight
 
-#     def right_inverse(self, X):
-#         # When someone assigns a matrix to the weight, decompose it via SVD
-#         U, S, Vh = torch.linalg.svd(X)
-#         left = U[:, : self.r] @ torch.diag(torch.sqrt(S[: self.r]))
-#         right = torch.diag(torch.sqrt(S[: self.r])) @ Vh[: self.r, :]
-#         # Return in the format our forward method expects
-#         return torch.cat([left, right.t()], dim=1)
+    #     # Compute the matrix logarithm of the target matrix
+    #     log_matrix = self.k * logm(target_matrix)
+
+    #     return torch.Tensor(log_matrix)
 
 
-# class LowRankKoopmanAutoencoder(Autoencoder):
-#     """
-#     Autoencoder model.
-#     """
+class LowRankFactorization(nn.Module):
+    def __init__(self, n: int, r: int):
+        super().__init__()
+        self.n = n  # dimension of square matrix
+        self.r = r  # target rank
 
-#     def __init__(
-#         self,
-#         rank: int,
-#         k: int,
-#         input_dimension: int = 2,
-#         latent_dimension: int = 4,
-#         hidden_configuration: Optional[List[Int]] = None,
-#         nonlinearity: str = "leakyrelu",
-#         batchnorm: bool = False,
-#     ):
-#         super().__init__(
-#             k,
-#             input_dimension,
-#             latent_dimension,
-#             hidden_configuration,
-#             nonlinearity,
-#             batchnorm,
-#             rank,
-#         )
+    def forward(self, X):
+        # Use the first n*r elements of X for left factor and the rest for right factor
+        left = X[:, : self.r]  # Shape: n × r
+        right = X[:, self.r :].t()  # Shape: r × n  (after transpose)
+        return left @ right
 
-#         parametrize.register_parametrization(
-#             self.koopman_matrix.linear_layer,
-#             "weight",
-#             LowRankFactorization(n=latent_dimension, r=rank),
-#         )
+    def right_inverse(self, X):
+        # When someone assigns a matrix to the weight, decompose it via SVD
+        U, S, Vh = torch.linalg.svd(X)
+        left = U[:, : self.r] @ torch.diag(torch.sqrt(S[: self.r]))
+        right = torch.diag(torch.sqrt(S[: self.r])) @ Vh[: self.r, :]
+        # Return in the format our forward method expects
+        return torch.cat([left, right.t()], dim=1)

@@ -9,7 +9,7 @@ from koopmann.models.layers import LinearLayer
 @pytest.mark.parametrize("in_features, out_features", [(5, 22), (34, 67)])
 @pytest.mark.parametrize("bias", [True, False])
 @pytest.mark.parametrize("batchnorm", [True, False])
-@pytest.mark.parametrize("nonlinearity", ["relu", "leakyrelu", None])
+@pytest.mark.parametrize("nonlinearity", ["relu", "leaky_relu", None])
 def test_linear_inits(in_features, out_features, nonlinearity, bias, batchnorm):
     layer = LinearLayer(
         in_channels=in_features,

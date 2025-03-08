@@ -1,3 +1,5 @@
+__all__ = ["Serializable"]
+
 import inspect
 import json
 import os
@@ -10,7 +12,7 @@ from typing import Any, Dict, Tuple, Union
 import safetensors.torch as st
 import torch.nn as nn
 
-from koopmann.models.utils import get_device
+from koopmann.utils import get_device
 
 
 class Serializable(ABC):
@@ -58,14 +60,12 @@ class Serializable(ABC):
 
         # Determine if it's a directory or if it's missing an extension
         if path.is_dir() or not path.suffix:
-            # Generate a default filename based on model class and timestamp
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             model_name = self.__class__.__name__.lower()
-            filename = f"{model_name}_{timestamp}.safetensors"
+            filename = f"{model_name}.safetensors"
 
             # If path is a file without extension, use it as a prefix
             if not path.is_dir() and not path.suffix:
-                filename = f"{path.name}_{timestamp}.safetensors"
+                filename = f"{path.name}.safetensors"
                 path = path.parent
 
             # Create the full path

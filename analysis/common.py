@@ -41,7 +41,7 @@ def load_model(file_dir: str, model_name: str) -> tuple:
         model, model_metadata = MLP.load_model(file_path=model_file_path)
         model.modules[-2].remove_nonlinearity()
         model.modules[-3].remove_nonlinearity()
-        # model.modules[-3].update_nonlinearity("leakyrelu")
+        # model.modules[-3].update_nonlinearity("leaky_relu")
     elif "resnet" in lower_model_name:
         model, model_metadata = ConvResNet.load_model(file_path=model_file_path)
     else:

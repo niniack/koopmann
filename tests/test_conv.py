@@ -10,7 +10,7 @@ from koopmann.models.layers import Conv2DLayer
 @pytest.mark.parametrize("kernel_size", [3, (3, 3)])
 @pytest.mark.parametrize("stride", [1, 2])
 @pytest.mark.parametrize("padding", [0, 1])
-@pytest.mark.parametrize("nonlinearity", ["relu", "leakyrelu", None])
+@pytest.mark.parametrize("nonlinearity", ["relu", "leaky_relu", None])
 @pytest.mark.parametrize("bias", [True, False])
 @pytest.mark.parametrize("batchnorm", [True, False])
 def test_conv2d_inits(

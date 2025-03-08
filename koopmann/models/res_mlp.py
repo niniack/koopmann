@@ -6,7 +6,6 @@ from collections import OrderedDict
 from typing import Any, Dict, Optional, Tuple
 
 import torch.nn as nn
-from jaxtyping import Float
 from torch import Tensor
 
 from koopmann.models.base import BaseTorchModel
@@ -90,7 +89,7 @@ class ResMLP(BaseTorchModel):
             output_layer.apply(LinearLayer.init_weights)
             self.components.add_module("output_layer", output_layer)
 
-    def forward(self, x: Float[Tensor, "batch features"]) -> Tensor:
+    def forward(self, x: float) -> Tensor:
         """Forward pass through the ResMLP."""
 
         x = self.components[0](x)

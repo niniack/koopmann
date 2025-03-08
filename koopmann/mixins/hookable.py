@@ -1,4 +1,4 @@
-from collections import OrderedDict
+__all__ = ["Hookable"]
 
 
 class Hookable:

@@ -22,6 +22,50 @@ VanillaAutoencoderResult = namedtuple("VanillaAutoencoderResult", "latent recons
 KoopmanAutoencoderResult = namedtuple("KoopmanAutoencoderResult", "predictions reconstruction")
 
 
+class AdaptiveScaler(nn.Module):
+    def __init__(self, initial_min=0.0, initial_max=5.0, momentum=0.99):
+        super().__init__()
+        # Register buffers for global statistics (updated with EMA)
+        self.register_buffer("global_mean", torch.tensor(0.0, dtype=torch.float))
+        self.register_buffer("global_std", torch.tensor(1.0, dtype=torch.float))
+        self.register_buffer("momentum", torch.tensor(momentum, dtype=torch.float))
+        self.register_buffer("initialized", torch.tensor(False, dtype=torch.bool))
+
+    def preprocess(self, x):
+        return x
+        # Update statistics with EMA during training
+        if self.training:
+            with torch.no_grad():
+                batch_mean = torch.mean(x)
+                batch_std = torch.std(x) + 1e-6  # avoid division by zero
+
+                if not self.initialized:
+                    # First batch - initialize with current batch statistics
+                    self.global_mean = batch_mean
+                    self.global_std = batch_std
+                    self.initialized.fill_(True)
+                else:
+                    # Update with EMA
+                    self.global_mean = (
+                        self.momentum * self.global_mean + (1 - self.momentum) * batch_mean
+                    )
+                    self.global_std = (
+                        self.momentum * self.global_std + (1 - self.momentum) * batch_std
+                    )
+
+        # Apply standardization - less disruptive to linear dynamics than min-max
+        return (x - self.global_mean) / self.global_std
+
+    def postprocess(self, x):
+        return x
+        # Reverse standardization
+        return x * self.global_std + self.global_mean
+
+    def update_statistics(self):
+        # No need for separate update step with this approach
+        pass
+
+
 class Autoencoder(BaseTorchModel):
     """
     Autoencoder model.
@@ -44,7 +88,7 @@ class Autoencoder(BaseTorchModel):
         self.bias = bias
         self.batchnorm = batchnorm
         self.nonlinearity = nonlinearity
-
+        self.scaler = AdaptiveScaler()
         # Warning
         if latent_features <= in_features:
             warnings.warn(
@@ -108,10 +152,14 @@ class Autoencoder(BaseTorchModel):
     def encode(self, x):
         ## Pre-encoder bias
         # x_bar = x - self.decoder[-1].linear_layer.bias
-        return self.encoder(x)
+        x = self.scaler.preprocess(x)
+        x = self.components.encoder(x)
+        return x
 
     def decode(self, x):
-        return self.decoder(x)
+        x = self.components.decoder(x)
+        x = self.scaler.postprocess(x)
+        return x
 
     def forward(self, x: float):
         phi_x = self.encode(x)
@@ -174,15 +222,18 @@ class KoopmanAutoencoder(Autoencoder):
         temp_container.add_module("decoder", self.components.decoder)
         self.components = temp_container
 
-    def forward(self, x: float, intermediate=False):
+    def forward(self, x: float, intermediate=False, k=None):
         phi_x = self.encode(x)
         x_recons = self.decode(phi_x)
+
+        if k is None:
+            k = self.k_steps
 
         # Stores all intermediate predictions
         if intermediate:
             # Advance latent variable k times
             prediction = [phi_x]
-            for i in range(1, self.k_steps + 1):
+            for i in range(1, k + 1):
                 prev_pred = prediction[i - 1]
                 prediction.append(self.components.koopman_matrix(prev_pred))
 
@@ -198,8 +249,7 @@ class KoopmanAutoencoder(Autoencoder):
 
         # Faster way, but no intermediate stores
         else:
-            K_weight = self.koopman_matrix.linear_layer.weight
-            K_effective_weight = torch.linalg.matrix_power(K_weight, self.k_steps)
+            K_effective_weight = torch.linalg.matrix_power(self.koopman_weights, k)
             # NOTE: this K is transposed because of
             # how torch handles matrix multiplication!
             x_k = phi_x @ K_effective_weight.T

@@ -20,11 +20,7 @@ def load_autoencoder(file_dir: str, ae_name: str):
     elif "exponential" in ae_name:
         AutoencoderClass = ExponentialKoopmanAutencoder
 
-    autoencoder, ae_metadata = AutoencoderClass.load_model(
-        ae_file_path,
-        strict=True,
-        remove_param=True,
-    )
+    autoencoder, ae_metadata = AutoencoderClass.load_model(file_path=ae_file_path)
     _ = autoencoder.eval()
 
     return autoencoder, ae_metadata
@@ -45,7 +41,7 @@ def load_model(file_dir: str, model_name: str) -> tuple:
     elif "resnet" in lower_model_name:
         model, model_metadata = ConvResNet.load_model(file_path=model_file_path)
     else:
-        if "residual" in lower_model_name:
+        if "res" in lower_model_name:
             model, model_metadata = ResMLP.load_model(file_path=model_file_path)
         else:
             model, model_metadata = MLP.load_model(file_path=model_file_path)

@@ -5,48 +5,23 @@ from typing import Optional, Union
 
 import fire
 import torch
-import wandb
 from config_def import Config
-from torch import nn, optim
+from torch import nn
 from torch.nn import Module
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 
-from koopmann.data import get_dataset_class
+import wandb
 from koopmann.log import logger
 from koopmann.models import MLP, ConvResNet, ResMLP
 from koopmann.utils import compute_model_accuracy, get_device
-from scripts.utils import separate_param_groups, setup_config
-
-
-def get_dataloaders(config):
-    # Train data
-    DatasetClass = get_dataset_class(name=config.train_data.dataset_name)
-    train_dataset = DatasetClass(config=config.train_data)
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=config.batch_size,
-        shuffle=True,
-        pin_memory=True,
-        persistent_workers=True,
-        num_workers=4,
-    )
-
-    # Test data
-    original_split = config.train_data.split
-    config.train_data.split = "test"
-    test_dataset = DatasetClass(config=config.train_data)
-    config.train_data.split = original_split
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=config.batch_size,
-        shuffle=True,
-        pin_memory=True,
-        persistent_workers=True,
-        num_workers=4,
-    )
-
-    return train_loader, test_loader, test_dataset
+from scripts.utils import (
+    compute_neural_collapse_metrics,
+    get_dataloaders,
+    get_optimizer,
+    separate_param_groups,
+    setup_config,
+)
 
 
 def get_model(config, dataset_features):
@@ -73,29 +48,7 @@ def get_model(config, dataset_features):
     return model
 
 
-def get_optimizer(config, model):
-    # For both SGD and AdamW, we want to avoid weight decay on batch norm parameters
-    param_groups = separate_param_groups(model, config.optim.weight_decay)
-
-    # Optimizer
-    if config.optim.type.value == "adamw":
-        optimizer = optim.AdamW(
-            params=param_groups,
-            lr=config.optim.learning_rate,
-        )
-    elif config.optim.type.value == "sgd":
-        optimizer = optim.SGD(
-            params=param_groups,
-            momentum=0.9,
-            lr=config.optim.learning_rate,
-        )
-    else:
-        raise NotImplementedError("Pick either 'sgd' or 'adamw'")
-
-    return optimizer
-
-
-def log_model_stats(model, step, log_histograms=False):
+def compute_model_stats(model, step, log_histograms=False):
     """
     Log model statistics to wandb.
     """
@@ -117,8 +70,7 @@ def log_model_stats(model, step, log_histograms=False):
                 if log_histograms:
                     stats[f"weights/{name}/histogram"] = wandb.Histogram(param.data.cpu().numpy())
 
-    # Log everything at once
-    wandb.log(stats, step=step)
+    return stats
 
 
 def train_one_epoch(
@@ -158,7 +110,7 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]] = None):
 
     # Model
     model = get_model(config, test_dataset.in_features)
-    model.to(device).train()
+    model.to(device).train().hook_model()
 
     # Loss
     loss = nn.CrossEntropyLoss()
@@ -198,6 +150,10 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]] = None):
         if (epoch + 1) % config.print_freq == 0:
             test_acc = compute_model_accuracy(model, test_loader, device)
             metrics["test/accuracy"] = test_acc
+            model_stats = compute_model_stats(model, epoch, log_histograms=True)
+            nc_stats = compute_neural_collapse_metrics(model, config, test_loader, device)
+            metrics.update(model_stats)
+            metrics.update(nc_stats)
             logger.info(
                 f"Epoch {epoch + 1}/{config.optim.num_epochs}, "
                 f"Loss: {train_loss:.4f}, "
@@ -207,15 +163,11 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]] = None):
         # Log all epoch metrics
         wandb.log(metrics, step=epoch)
 
-        # Log histogram data (expensive operation) every 5 epochs
-        if epoch % 5 == 0:
-            log_model_stats(model, epoch, log_histograms=True)
-
     # Save model
     if config.save_dir:
         os.makedirs(os.path.dirname(config.save_dir), exist_ok=True)
         model_path = Path(config.save_dir)
-        model.save_model(model_path)
+        model.save_model(model_path, dataset=test_dataset.name())
 
 
 if __name__ == "__main__":

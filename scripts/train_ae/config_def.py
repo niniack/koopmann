@@ -12,21 +12,7 @@ from pydantic import (
 )
 
 from koopmann.data import DatasetConfig
-
-
-class WandBConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    use_wandb: bool
-    entity: str | None = None
-    project: str | None = None
-
-
-class OptimConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    num_epochs: NonNegativeInt
-    learning_rate: PositiveFloat
-    weight_decay: NonNegativeFloat
-    betas: list[PositiveFloat] | None = None
+from scripts.common_config_def import OptimConfig, OptimParam, WandBConfig
 
 
 # ScaleConfig for scale-related parameters

@@ -1,11 +1,13 @@
 model: 
+    residual: True
     out_features: 2
-    hidden_neurons: [10,8,6,3]
+    hidden_neurons: [10,10,10,10,10,10,10,10,10,10,10,10,10,10]
 
 optim: 
-    weight_decay: 1e-2
+    type: "sgd"
+    weight_decay: 5e-2
     num_epochs: 5_000
-    learning_rate: 1e-3
+    learning_rate: 1e-2
 
 train_data: 
     dataset_name: "LotusRootDataset"
@@ -13,10 +15,20 @@ train_data:
     split: "train"
     torch_transform: null
     seed: 42
-    negative_label: false
+    negative_label: False
+
+wandb: 
+    use_wandb: True
+    entity: "nishantaswani"
+    project: "koopman_interp"
 
 seed: 0
 batch_size: 1_000
 print_freq: 500
+task_type: "classifier"
 save_name: "lotusroot_model"
-save_dir: "/home/nsa325/work/koopmann/model_saves/"
+save_dir: "/scratch/nsa325/koopmann_model_saves/"
+
+
+
+

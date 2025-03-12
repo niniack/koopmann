@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Optional, Type, TypeVar, Union
 
 import torch
-import wandb
 import yaml
 from neural_collapse.accumulate import (
     CovarAccumulator,
@@ -24,11 +23,147 @@ from neural_collapse.measure import (
     variability_cdnv,
 )
 from pydantic import BaseModel
+from torch import optim
+from torch.utils.data import DataLoader
 
+import wandb
+from koopmann.data import (
+    get_dataset_class,
+)
 from koopmann.log import logger
 from koopmann.utils import set_seed
 
 T = TypeVar("T", bound=BaseModel)
+
+
+def get_dataloaders(config):
+    # Train data
+    DatasetClass = get_dataset_class(name=config.train_data.dataset_name)
+    train_dataset = DatasetClass(config=config.train_data)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=config.batch_size,
+        shuffle=True,
+        pin_memory=True,
+        persistent_workers=True,
+        num_workers=4,
+    )
+
+    # Test data
+    original_split = config.train_data.split
+    config.train_data.split = "test"
+    test_dataset = DatasetClass(config=config.train_data)
+    config.train_data.split = original_split
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=config.batch_size,
+        shuffle=True,
+        pin_memory=True,
+        persistent_workers=True,
+        num_workers=4,
+    )
+
+    return train_loader, test_loader, test_dataset
+
+
+def get_optimizer(config, model):
+    # For both SGD and AdamW, we want to avoid weight decay on batch norm parameters
+    param_groups = separate_param_groups(model, config.optim.weight_decay)
+
+    # Optimizer
+    if config.optim.type.value == "adamw":
+        optimizer = optim.AdamW(
+            params=param_groups,
+            lr=config.optim.learning_rate,
+        )
+    elif config.optim.type.value == "sgd":
+        optimizer = optim.SGD(
+            params=param_groups,
+            momentum=0.9,
+            lr=config.optim.learning_rate,
+        )
+    else:
+        raise NotImplementedError("Pick either 'sgd' or 'adamw'")
+
+    return optimizer
+
+
+def compute_neural_collapse_metrics(model, config, dataloader, device):
+    model.eval()
+    layer_key = list(model.get_forward_activations().keys())[-2]
+    num_classes = config.model.out_features
+    d_vectors = config.model.hidden_neurons[-1]
+
+    # Mean
+    mean_accum = MeanAccumulator(
+        n_classes=num_classes,
+        d_vectors=d_vectors,
+        device=device,
+    )
+    for inputs, labels in dataloader:
+        inputs, labels = inputs.to(device), labels.to(device).squeeze()
+        _ = model(inputs)
+        act_dict = model.get_forward_activations()
+        mean_accum.accumulate(act_dict[layer_key], labels)
+    means, mG = mean_accum.compute()
+
+    # Variance, covariance
+    var_norms_accum = VarNormAccumulator(
+        n_classes=num_classes,
+        d_vectors=d_vectors,
+        device=device,
+    )
+    covar_accum = CovarAccumulator(
+        n_classes=num_classes,
+        d_vectors=d_vectors,
+        device=device,
+        M=means,
+    )
+
+    for inputs, labels in dataloader:
+        inputs, labels = inputs.to(device), labels.to(device).squeeze()
+        _ = model(inputs)
+        act_dict = model.get_forward_activations()
+        var_norms_accum.accumulate(act_dict[layer_key], labels, means)
+        covar_accum.accumulate(act_dict[layer_key], labels, means)
+    var_norms, _ = var_norms_accum.compute()
+    covar_within = covar_accum.compute()
+
+    # dec_accum = DecAccumulator(10, 512, "cuda", M=means, W=weights)
+    # dec_accum.create_index(means)  # optionally use FAISS index for NCC
+    # for i, (images, labels) in enumerate(test_loader):
+    #     images, labels = images.to(device), labels.to(device)
+    #     outputs = model(images)
+
+    #     # mean embeddings (only) necessary again if not using FAISS index
+    #     if dec_accum.index is None:
+    #         dec_accum.accumulate(Features.value, labels, weights, means)
+    #     else:
+    #         dec_accum.accumulate(Features.value, labels, weights)
+
+    # ood_mean_accum = MeanAccumulator(10, 512, "cuda")
+    # for i, (images, labels) in enumerate(ood_loader):
+    #     images, labels = images.to(device), labels.to(device)
+    #     outputs = model(images)
+    #     ood_mean_accum.accumulate(Features.value, labels)
+    # _, mG_ood = ood_mean_accum.compute()
+
+    # Neural collapse measurements
+    nc_results_dict = {
+        "neural_collapse/nc1_pinv": covariance_ratio(covar_within, means, mG),
+        "neural_collapse/nc1_svd": covariance_ratio(covar_within, means, mG, "svd"),
+        "neural_collapse/nc1_quot": covariance_ratio(covar_within, means, mG, "quotient"),
+        # "nc1_cdnv": variability_cdnv(var_norms, means, tile_size=64),
+        "neural_collapse/nc2_etf_err": simplex_etf_error(means, mG),
+        "neural_collapse/nc2g_dist": kernel_stats(means, mG, tile_size=64)[1],
+        "neural_collapse/nc2g_log": kernel_stats(means, mG, kernel=log_kernel, tile_size=64)[1],
+        # "nc3_dual_err": self_duality_error(weights, means, mG),
+        # "nc3u_uni_dual": similarities(weights, means, mG).var().item(),
+        # "nc4_agree": clf_ncc_agreement(dec_accum),
+        # "nc5_ood_dev": orthogonality_deviation(means, mG_ood),
+    }
+
+    return nc_results_dict
 
 
 def separate_param_groups(model, weight_decay):
@@ -148,81 +283,3 @@ def load_config(config_path_or_obj: Path | str | T | dict, config_model: type[T]
         config_dict = yaml.safe_load(f)
 
     return config_model(**config_dict)
-
-
-def compute_neural_collapse_metrics(model, config, train_loader, device):
-    model.eval()
-    # weights = model.fc.weight
-
-    layer_key = list(model.get_fwd_activations().keys())[-2]
-    num_classes = config.model.out_features
-    d_vectors = config.model.hidden_neurons[-1]
-
-    # Mean
-    mean_accum = MeanAccumulator(
-        n_classes=num_classes,
-        d_vectors=d_vectors,
-        device=device,
-    )
-    for images, labels in train_loader:
-        images, labels = images.to(device), labels.to(device)
-        _ = model(images)
-        act_dict = model.get_fwd_activations()
-        mean_accum.accumulate(act_dict[layer_key], labels)
-    means, mG = mean_accum.compute()
-
-    # Variance, covariance
-    # var_norms_accum = VarNormAccumulator(
-    #     n_classes=num_classes,
-    #     d_vectors=d_vectors,
-    #     device=device,
-    # )
-    # covar_accum = CovarAccumulator(
-    #     n_classes=num_classes,
-    #     d_vectors=d_vectors,
-    #     device=device,
-    #     M=means,
-    # )
-    # for images, labels in train_loader:
-    #     images, labels = images.to(device), labels.to(device)
-    #     _ = model(images)
-    #     var_norms_accum.accumulate(act_dict[layer_key], labels, means)
-    #     covar_accum.accumulate(act_dict[layer_key], labels, means)
-    # var_norms, _ = var_norms_accum.compute()
-    # covar_within = covar_accum.compute()
-
-    # dec_accum = DecAccumulator(10, 512, "cuda", M=means, W=weights)
-    # dec_accum.create_index(means)  # optionally use FAISS index for NCC
-    # for i, (images, labels) in enumerate(test_loader):
-    #     images, labels = images.to(device), labels.to(device)
-    #     outputs = model(images)
-
-    #     # mean embeddings (only) necessary again if not using FAISS index
-    #     if dec_accum.index is None:
-    #         dec_accum.accumulate(Features.value, labels, weights, means)
-    #     else:
-    #         dec_accum.accumulate(Features.value, labels, weights)
-
-    # ood_mean_accum = MeanAccumulator(10, 512, "cuda")
-    # for i, (images, labels) in enumerate(ood_loader):
-    #     images, labels = images.to(device), labels.to(device)
-    #     outputs = model(images)
-    #     ood_mean_accum.accumulate(Features.value, labels)
-    # _, mG_ood = ood_mean_accum.compute()
-
-    # Neural collapse measurements
-    nc_results_dict = {
-        # "nc1_pinv": covariance_ratio(covar_within, means, mG),
-        # "nc1_svd": covariance_ratio(covar_within, means, mG, "svd"),
-        # "nc1_quot": covariance_ratio(covar_within, means, mG, "quotient"),
-        # "nc1_cdnv": variability_cdnv(var_norms, means, tile_size=64),
-        "nc2_etf_err": simplex_etf_error(means, mG),
-        "nc2g_dist": kernel_stats(means, mG, tile_size=64)[1],
-        "nc2g_log": kernel_stats(means, mG, kernel=log_kernel, tile_size=64)[1],
-        # "nc3_dual_err": self_duality_error(weights, means, mG),
-        # "nc3u_uni_dual": similarities(weights, means, mG).var().item(),
-        # "nc4_agree": clf_ncc_agreement(dec_accum),
-        # "nc5_ood_dev": orthogonality_deviation(means, mG_ood),
-    }
-
-    return nc_results_dict

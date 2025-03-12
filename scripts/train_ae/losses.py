@@ -1,9 +1,8 @@
 import pdb
 
 import torch
+import torch.nn.functional as F
 from torch import linalg
-
-from scripts.common import prepare_padded_acts_and_masks
 
 
 def linear_warmup(
@@ -44,17 +43,17 @@ def _latent_prediction_loss(act_dict, autoencoder, k) -> tuple:
     padded_acts, _ = prepare_padded_acts_and_masks(act_dict, autoencoder)
 
     # Encode each layer’s padded activation into latent space
-    latent_acts = [autoencoder._encode(padded_act) for padded_act in padded_acts]
+    latent_acts = [autoencoder.encode(padded_act) for padded_act in padded_acts]
     latent_acts = torch.stack(latent_acts, dim=1)  # shape: [batch, layers, latent]
 
     # NOTE: Is this right? I think we should be detaching these to prevent a complicated
     # computational graph.
-    latent_acts = latent_acts.detach()
+    # latent_acts = latent_acts.detach()
 
     # Koopman step: multiply the *first* layer’s latent by K^k
     # NOTE: this K used to be transposed.
-    K = autoencoder.koopman_matrix.linear_layer.weight.T
-    embedded_act = latent_acts[:, 0, :] @ linalg.matrix_power(K, k)
+    K = autoencoder.koopman_weights.T
+    embedded_act = latent_acts[:, 0, :] @ linalg.matrix_power(K, autoencoder.k_steps)
 
     # Compare predicted embedding with the *last-layer* embedding
     # Square the difference, average across batch
@@ -83,11 +82,10 @@ def compute_k_prediction_loss(act_dict, autoencoder, k, probed) -> tuple:
 
 
 def _k_prediction_loss(act_dict, autoencoder, k) -> tuple:
-    # Extract activations from the dictionary
-    act_list = list(act_dict.values())
+    padded_acts, _ = prepare_padded_acts_and_masks(act_dict, autoencoder)
 
-    starting_acts = act_list[0]  # shape: [batch, neurons]
-    target_acts = act_list[-1]  # shape: [batch, neurons]
+    starting_acts = padded_acts[0]  # shape: [batch, neurons]
+    target_acts = padded_acts[-1]  # shape: [batch, neurons]
 
     # Get autoencoder predictions: shape [layers, batch, neurons]
     all_preds = autoencoder(x=starting_acts, k=k).predictions
@@ -242,20 +240,87 @@ def compute_eigenloss(act_dict, autoencoder, k, probed) -> tuple:
     return (static_eigen_loss, static_eigen_loss)
 
 
-########################## Sparsity Loss##########################
-def compute_sparsity_loss(act_dict, autoencoder, k, probed) -> tuple:
-    # Prepare padded activations (we don't need masks for latent space)
+########################## Isometric Loss##########################
+def compute_isometric_loss(act_dict, autoencoder, k, probed) -> tuple:
     padded_acts, _ = prepare_padded_acts_and_masks(act_dict, autoencoder)
+    starting_acts = padded_acts[0]  # shape: [batch, neurons]
+    target_acts = padded_acts[-1]  # shape: [batch, neurons]
 
-    # Encode each layer's padded activation into latent space
-    latent_acts = [autoencoder._encode(padded_act) for padded_act in padded_acts]
-    latent_acts = torch.stack(latent_acts, dim=1)  # shape: [batch, layers, latent]
+    # Encode both starting and target states
+    encoded_starting = autoencoder.components.encoder(starting_acts)
+    encoded_target = autoencoder.components.encoder(target_acts)
 
-    # Average across batch to get batch-independent statistic
-    # Then sum across latent dimension to get total feature usage per layer
-    l1_per_layer = torch.abs(latent_acts).mean(dim=0).sum(dim=1)  # shape: [layers]
+    # Compute latent predictions
+    # encoded_preds = encoded_starting @ torch.linalg.matrix_power(
+    #     autoencoder.koopman_weights.T, autoencoder.k_steps
+    # )
 
-    # Sum across layers for total sparsity
-    total_l1 = l1_per_layer.sum()
+    # Pairwise distances for starting
+    start_dists = torch.cdist(starting_acts, starting_acts)
+    enc_start_dists = torch.cdist(encoded_starting, encoded_starting)
 
-    return total_l1, total_l1
+    # Pairwise distances for target states
+    target_dists = torch.cdist(target_acts, target_acts)
+    enc_target_dists = torch.cdist(encoded_target, encoded_target)
+
+    # Pairwise distances for predicted
+    # enc_pred_dists = torch.cdist(encoded_preds, encoded_preds)
+
+    # Isometric errors
+    start_iso_error = (enc_start_dists - start_dists).pow(2).mean()
+    target_iso_error = (enc_target_dists - target_dists).pow(2).mean()
+    # target_iso_error += (enc_pred_dists - target_dists).pow(2).mean()
+    iso_error = start_iso_error + target_iso_error
+
+    # Variance for normalization
+    start_variance = start_dists.var()
+    target_variance = target_dists.var()
+    total_variance = start_variance + target_variance
+
+    # FVU (Fraction of Variance Unexplained)
+    iso_fvu = iso_error / (total_variance + 1e-8)
+
+    return iso_error, iso_fvu
+
+
+def calculate_replacement_error(autoencoder, model, first_value, last_index, label, k_steps):
+    """Calculate replacement error."""
+    pred_act = autoencoder(first_value, k=k_steps).predictions[-1]
+    output = model.components[last_index + 1 :](pred_act)
+    return F.cross_entropy(output, label.long())
+
+
+########################## Padding ##########################
+def pad_act(x, target_size):
+    current_size = x.size(1)
+    if current_size < target_size:
+        pad_size = target_size - current_size
+        x = F.pad(x, (0, pad_size), mode="constant", value=0)
+
+    return x
+
+
+def prepare_padded_acts_and_masks(act_dict, autoencoder):
+    """
+    Returns:
+      padded_acts: list of padded activation tensors (one per layer)
+      masks: list of 1/0 masks for ignoring "extra" neurons in padded activations
+    """
+
+    # Autoencoder input dimension
+    ae_input_size = autoencoder.components.encoder[0].in_channels
+    padded_acts = []
+    masks = []
+
+    # Iterate through all activations
+    for act in act_dict.values():
+        # Pad activations
+        padded_act = pad_act(act, ae_input_size)
+        padded_acts.append(padded_act)
+
+        # Construct a mask that has '1' up to original size, then 0
+        mask = torch.zeros(ae_input_size, device=act.device)
+        mask[: act.size(-1)] = 1
+        masks.append(mask)
+
+    return padded_acts, masks

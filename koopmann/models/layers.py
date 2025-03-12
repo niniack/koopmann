@@ -1,181 +1,154 @@
-__all__ = ["LinearLayer", "Conv2DLayer"]
+# layers.py
+__all__ = ["Layer", "LinearLayer", "Conv2DLayer"]
 
-from abc import ABC, abstractmethod
-from collections import OrderedDict
+from abc import ABC
+from typing import Optional, Tuple, Union
 
-import torch
 import torch.nn as nn
-from torch import Tensor
-from torch.utils.hooks import RemovableHandle
 
-from .utils import StringtoClassNonlinearity
-
-
-class Layer(nn.Module, ABC):
-    def __init__(self):
-        super().__init__()
-
-    @property
-    @abstractmethod
-    def kwargs(self) -> dict:
-        """Return keyword arguments dictionary."""
-        pass
-
-    @property
-    @abstractmethod
-    def forward_activations(self) -> Tensor:
-        """Returns tensor of forward activations from hook."""
-        pass
-
-    @property
-    @abstractmethod
-    def is_hooked(self) -> bool:
-        """Returns boolean indicating whether layer has hook."""
-        pass
-
-    @abstractmethod
-    def setup_hook(self) -> bool:
-        """Sets up a hook."""
-        pass
-
-    @abstractmethod
-    def remove_hook(self) -> bool:
-        """Tears down the hook."""
-        pass
+from koopmann.mixins.hookable import Hookable
+from koopmann.models.utils import StringtoClassNonlinearity
 
 
-#######################################################################################
-####################################### LINEAR ########################################
-#######################################################################################
+class Layer(nn.Module, ABC, Hookable):
+    """Abstract base class for all layer types."""
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        bias: bool,
+        batchnorm: bool,
+        nonlinearity: Optional[str],
+    ):
+        nn.Module.__init__(self)  # Initialize nn.Module
+        Hookable.__init__(self)  # Initialize Hookable
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.components = nn.ModuleDict()
+
+        # Handle nonlinearity
+        if nonlinearity is None:
+            pass
+        elif not isinstance(nonlinearity, str):
+            raise ValueError("Nonlinearity should be a string!")
+        else:
+            self.nonlinearity_module = StringtoClassNonlinearity[nonlinearity].value
+
+    def get_component(self, name):
+        if name in self.components.keys():
+            return self.components[name]
+        else:
+            return None
+
+    @classmethod
+    def init_weights(cls, module: nn.Module):
+        """Initialize weights"""
+
+        if isinstance(module, nn.Linear) or isinstance(module, nn.Conv2d):
+            nn.init.kaiming_normal_(module.weight, nonlinearity="relu")
+            if module.bias is not None:
+                module.bias.data.fill_(0.01)
 
 
 class LinearLayer(Layer):
     """
-    Linear layer with the option for a batch norm and an activation with a hook.
+    Linear layer with built-in batchnorm and nonlinearity.
     """
 
     def __init__(
         self,
-        in_features: int,
-        out_features: int,
-        nonlinearity: str | nn.Module,
+        in_channels: int,
+        out_channels: int,
         bias: bool = True,
         batchnorm: bool = False,
-        hook: bool = False,
+        nonlinearity: Optional[str] = "relu",
     ):
-        super().__init__()
-
-        self.layers = nn.Sequential()
-
-        # Linear
-        self.layers.add_module(
-            "linear", nn.Linear(in_features=in_features, out_features=out_features, bias=bias)
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            bias=bias,
+            batchnorm=batchnorm,
+            nonlinearity=nonlinearity,
         )
 
-        # Batchnorm
+        # Linear component
+        self.components["linear"] = nn.Linear(
+            in_features=in_channels,
+            out_features=out_channels,
+            bias=bias,
+        )
+
+        # Batchnorm (optional)
         if batchnorm:
-            self.layers.add_module("batchnorm", nn.BatchNorm1d(out_features))
+            self.components["batchnorm"] = nn.BatchNorm1d(out_channels)
 
-        # Nonlinearity
-        if isinstance(nonlinearity, str):
-            nonlinearity = StringtoClassNonlinearity[nonlinearity].value
-
-        if nonlinearity:
-            self.layers.add_module("nonlinearity", nonlinearity())
-
-        self._kwargs = OrderedDict(
-            {
-                "in_features": in_features,
-                "out_features": out_features,
-                "nonlinearity": nonlinearity,
-                "bias": bias,
-                "hook": hook,
-            }
-        )
-
-        self._forward_activations: Tensor = None
-
-        # Hook
-        self._handle: RemovableHandle = None
-        if hook:
-            self.setup_hook()
-
-    @property
-    def kwargs(self) -> dict:
-        """Returns keyword arguments dictionary."""
-        return self._kwargs
-
-    @property
-    def in_features(self) -> dict:
-        """Returns input dimension."""
-        return self._kwargs["in_features"]
-
-    @property
-    def out_features(self) -> dict:
-        """Returns output dimension."""
-        return self._kwargs["out_features"]
-
-    @property
-    def linear_layer(self) -> dict:
-        """Returns input dimension."""
-        return self.layers[0]
-
-    @property
-    def forward_activations(self) -> Tensor:
-        """Returns tensor of forward activations from hook."""
-        return self._forward_activations
-
-    @property
-    def is_hooked(self) -> bool:
-        """Returns boolean indicating whether layer has hook."""
-        return self._kwargs["hook"]
-
-    def setup_hook(self):
-        """Sets up a hook."""
-
-        def _hook(module, input, output):
-            self._forward_activations = output
-
-        self._kwargs["hook"] = True
-
-        layer = self.layers[-1]
-        self._handle = layer.register_forward_hook(_hook)
-
-    def remove_hook(self):
-        """Tears down the hook."""
-        self._kwargs["hook"] = False
-        if self._handle:
-            self._handle.remove()
-
-    def remove_nonlinearity(self):
-        self._kwargs["nonlinearity"] = None
-        self.layers = nn.Sequential(
-            OrderedDict(
-                (name, layer)
-                for name, layer in self.layers.named_children()
-                if name != "nonlinearity"
-            )
-        )
-
-    def update_nonlinearity(self, nonlinearity, **kwargs):
-        self._kwargs["nonlinearity"] = nonlinearity
-        new_nonlinearity_layer = StringtoClassNonlinearity[nonlinearity].value
-        new_ordered_dict = OrderedDict()
-        for name, layer in self.layers.named_children():
-            if name == "nonlinearity":
-                continue
-            new_ordered_dict[name] = layer
-        new_ordered_dict["nonlinearity"] = new_nonlinearity_layer(**kwargs)
-        self.layers = nn.Sequential(new_ordered_dict)
+        # Nonlinearity (optional)
+        if nonlinearity is not None:
+            self.components["nonlinearity"] = self.nonlinearity_module()
 
     def forward(self, x):
-        self._forward_activations = None
-        x = x.flatten(start_dim=1)
-        return self.layers(x)
+        # Flatten
+        if len(x.shape) > 2:
+            x = x.flatten(start_dim=1)
 
-    @staticmethod
-    def init_weights(module: nn.Module):
-        if isinstance(module, nn.Linear):
-            nn.init.kaiming_normal_(module.weight, nonlinearity="relu")
-            if module.bias is not None:
-                module.bias.data.fill_(0.01)
+        for component in self.components.values():
+            x = component(x)
+
+        return x
+
+
+class Conv2DLayer(Layer):
+    """
+    2D Convolutional layer with built-in batchnorm and nonlinearity.
+    """
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: Union[int, Tuple[int, int]],
+        stride: Union[int, Tuple[int, int]] = 1,
+        padding: Union[int, Tuple[int, int]] = 0,
+        bias: bool = True,
+        batchnorm: bool = False,
+        nonlinearity: Optional[str] = "relu",
+    ):
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            bias=bias,
+            batchnorm=batchnorm,
+            nonlinearity=nonlinearity,
+        )
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
+
+        # Conv2d
+        self.components["conv"] = nn.Conv2d(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            bias=bias,
+        )
+
+        # Batchnorm (optional)
+        if batchnorm:
+            self.components["batchnorm"] = nn.BatchNorm2d(out_channels)
+
+        # Nonlinearity (optional)
+        if nonlinearity is not None:
+            self.components["nonlinearity"] = self.nonlinearity_module()
+
+    def forward(self, x):
+        if len(x.shape) != 4:
+            raise ValueError("Expects 4D input!")
+
+        for component in self.components.values():
+            x = component(x)
+
+        return x

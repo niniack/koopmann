@@ -1,32 +1,69 @@
 __all__ = [
     "Autoencoder",
+    "KoopmanAutoencoder",
     "ExponentialKoopmanAutencoder",
     "LowRankKoopmanAutoencoder",
 ]
 
 import warnings
-from ast import literal_eval
-from collections import OrderedDict, namedtuple
-from pathlib import Path
-from typing import List, Optional
+from collections import namedtuple
+from typing import Any, Optional
 
 import torch
 import torch.nn as nn
 import torch.nn.utils.parametrize as parametrize
-from jaxtyping import Float, Int
-from safetensors.torch import load_model, save_model
 from torch import Tensor
 
 from koopmann.models.base import BaseTorchModel
 from koopmann.models.layers import LinearLayer
-from koopmann.models.utils import (
-    StringtoClassNonlinearity,
-    eigeninit,
-    get_device,
-    parse_safetensors_metadata,
-)
+from koopmann.models.utils import eigeninit
 
-AutoencoderResult = namedtuple("AutoencoderResult", "predictions reconstruction")
+VanillaAutoencoderResult = namedtuple("VanillaAutoencoderResult", "latent reconstruction")
+KoopmanAutoencoderResult = namedtuple("KoopmanAutoencoderResult", "predictions reconstruction")
+
+
+class AdaptiveScaler(nn.Module):
+    def __init__(self, initial_min=0.0, initial_max=5.0, momentum=0.99):
+        super().__init__()
+        # Register buffers for global statistics (updated with EMA)
+        self.register_buffer("global_mean", torch.tensor(0.0, dtype=torch.float))
+        self.register_buffer("global_std", torch.tensor(1.0, dtype=torch.float))
+        self.register_buffer("momentum", torch.tensor(momentum, dtype=torch.float))
+        self.register_buffer("initialized", torch.tensor(False, dtype=torch.bool))
+
+    def preprocess(self, x):
+        return x
+        # Update statistics with EMA during training
+        if self.training:
+            with torch.no_grad():
+                batch_mean = torch.mean(x)
+                batch_std = torch.std(x) + 1e-6  # avoid division by zero
+
+                if not self.initialized:
+                    # First batch - initialize with current batch statistics
+                    self.global_mean = batch_mean
+                    self.global_std = batch_std
+                    self.initialized.fill_(True)
+                else:
+                    # Update with EMA
+                    self.global_mean = (
+                        self.momentum * self.global_mean + (1 - self.momentum) * batch_mean
+                    )
+                    self.global_std = (
+                        self.momentum * self.global_std + (1 - self.momentum) * batch_std
+                    )
+
+        # Apply standardization - less disruptive to linear dynamics than min-max
+        return (x - self.global_mean) / self.global_std
+
+    def postprocess(self, x):
+        return x
+        # Reverse standardization
+        return x * self.global_std + self.global_mean
+
+    def update_statistics(self):
+        # No need for separate update step with this approach
+        pass
 
 
 class Autoencoder(BaseTorchModel):
@@ -36,147 +73,169 @@ class Autoencoder(BaseTorchModel):
 
     def __init__(
         self,
-        k: int,
-        input_dimension: int = 2,
-        latent_dimension: int = 4,
-        hidden_configuration: Optional[List[Int]] = None,
-        nonlinearity: str = "leakyrelu",
+        in_features: int = 2,
+        latent_features: int = 4,
+        hidden_config: Optional[list[int]] = None,
+        bias: bool = True,
         batchnorm: bool = False,
-        rank: int = None,
+        nonlinearity: str = "leaky_relu",
     ):
         super().__init__()
 
-        if latent_dimension <= input_dimension:
-            warnings.warn(
-                f"The latent dimension {latent_dimension} should probably be "
-                f"larger than the input dimension {input_dimension}!"
-            )
-
-        self.input_dimension = input_dimension
-        self.latent_dimension = latent_dimension
-        self.steps = k
+        self.in_features = in_features
+        self.latent_features = latent_features
+        self.hidden_config = hidden_config
+        self.bias = bias
         self.batchnorm = batchnorm
-        self.rank = rank
-
-        # Store random projections in a ModuleDict as non-trainable parameters
-        self.random_projections = nn.ParameterDict()
-
-        # Convert string nonlinearity to class
         self.nonlinearity = nonlinearity
-        nonlinearity = StringtoClassNonlinearity[nonlinearity].value
+        self.scaler = AdaptiveScaler()
+        # Warning
+        if latent_features <= in_features:
+            warnings.warn(
+                f"The latent dimension {latent_features} should probably be "
+                f"larger than the input dimension {in_features}!"
+            )
 
         # Set up autoencoder architecture
-        if not hidden_configuration:
-            self.hidden_configuration = None
+        if not hidden_config:
             channel_dims = [
-                (input_dimension, latent_dimension),
+                (in_features, latent_features),
             ]
         else:
-            self.hidden_configuration = hidden_configuration
-            dims_list = [input_dimension, latent_dimension]
-            dims_list = dims_list[:1] + hidden_configuration + dims_list[1:]
-
+            dims_list = [in_features, latent_features]
+            dims_list = dims_list[:1] + hidden_config + dims_list[1:]
             channel_dims = [(dims_list[i - 1], dims_list[i]) for i in range(1, len(dims_list))]
 
-        ################## ENCODER #################
-        self._encoder = nn.Sequential()
-        for i in range(0, len(channel_dims), 1):
-            self._encoder.append(
-                LinearLayer(
-                    in_features=channel_dims[i][0],
-                    out_features=channel_dims[i][1],
-                    nonlinearity=nonlinearity,
-                    bias=True,
-                    batchnorm=batchnorm,
-                    hook=False,
-                )
-            )
-            self._encoder.apply(LinearLayer.init_weights)
+        # Build components
+        encoder = self._build_encoder(channel_dims)
+        self.components.add_module("encoder", encoder)
 
-        ######################
-        # Koopman matrix
-        ######################
-        self._koopman_matrix = LinearLayer(
-            in_features=latent_dimension,
-            out_features=latent_dimension,
-            nonlinearity=None,
-            bias=False,
-            batchnorm=False,
-            hook=False,
-        )
-        # eigeninit(self._koopman_matrix.linear_layer.weight, theta=0.3)
+        decoder = self._build_decoder(channel_dims)
+        self.components.add_module("decoder", decoder)
 
-        ################## DECODER #################
-        self._decoder = nn.Sequential()
-        for i in range(len(channel_dims) - 1, -1, -1):
-            self._decoder.append(
-                LinearLayer(
-                    in_features=channel_dims[i][1],
-                    out_features=channel_dims[i][0],
-                    nonlinearity=nonlinearity if (i != 0) else None,
-                    bias=True,
-                    batchnorm=False,
-                    hook=False,
-                )
-            )
-            self._decoder.apply(LinearLayer.init_weights)
-
-    @property
-    def encoder(self) -> nn.Sequential:
+    def _build_encoder(self, channel_dims) -> nn.Sequential:
         """Returns the encoder in a sequential container."""
-        return self._encoder
 
-    @property
-    def decoder(self) -> nn.Sequential:
+        encoder = nn.Sequential()
+        for i in range(0, len(channel_dims), 1):
+            encoder_layer = LinearLayer(
+                in_channels=channel_dims[i][0],
+                out_channels=channel_dims[i][1],
+                bias=self.bias,
+                batchnorm=self.batchnorm,
+                nonlinearity=self.nonlinearity,
+            )
+
+            encoder_layer.apply(LinearLayer.init_weights)
+            encoder.add_module(f"encoder_{i}", encoder_layer)
+
+        return encoder
+
+    def _build_decoder(self, channel_dims) -> nn.Sequential:
         """Returns the decoder in a sequential container."""
-        return self._decoder
 
-    @property
-    def koopman_matrix(self) -> nn.Sequential:
-        """Returns the Koopman matrix in a sequential container."""
-        return self._koopman_matrix
+        decoder = nn.Sequential()
+        for i in range(len(channel_dims) - 1, -1, -1):
+            decoder_layer = LinearLayer(
+                in_channels=channel_dims[i][1],
+                out_channels=channel_dims[i][0],
+                bias=self.bias,
+                batchnorm=self.batchnorm,
+                nonlinearity=self.nonlinearity if (i != 0) else None,
+            )
 
-    def hook_model(self) -> None:
-        raise NotImplementedError()
+            decoder_layer.apply(LinearLayer.init_weights)
+            decoder.add_module(f"decoder_{i}", decoder_layer)
 
-    @property
-    def modules(self) -> nn.Sequential:
-        """Returns the autoencoder modules in a sequential container."""
-        return nn.Sequential(self._koopman_matrix, *(list(self._encoder) + list(self._decoder)))
+        return decoder
 
-    def _encode(self, x):
+    def encode(self, x):
         ## Pre-encoder bias
         # x_bar = x - self.decoder[-1].linear_layer.bias
-        return self.encoder(x)
+        x = self.scaler.preprocess(x)
+        x = self.components.encoder(x)
+        return x
 
-    def _decode(self, x):
-        return self.decoder(x)
+    def decode(self, x):
+        x = self.components.decoder(x)
+        x = self.scaler.postprocess(x)
+        return x
 
-    def forward(
+    def forward(self, x: float):
+        phi_x = self.encode(x)
+        x_recons = self.decode(phi_x)
+        return VanillaAutoencoderResult(phi_x, x_recons)
+
+    def _get_basic_metadata(self) -> dict[str, Any]:
+        """Get model-specific metadata for serialization."""
+        return {
+            "in_features": self.in_features,
+            "latent_features": self.latent_features,
+            "hidden_config": self.hidden_config,
+            "bias": self.bias,
+            "batchnorm": self.batchnorm,
+            "nonlinearity": self.nonlinearity,
+        }
+
+
+class KoopmanAutoencoder(Autoencoder):
+    """
+    Koopman autoencoder model.
+    """
+
+    def __init__(
         self,
-        x: Float[Tensor, "batch features"],
-        k: Int = 0,
-        intermediate=False,
-    ) -> AutoencoderResult:
-        """Forward."""
+        k_steps: int,
+        in_features: int = 2,
+        latent_features: int = 4,
+        hidden_config: Optional[list[int]] = None,
+        bias: bool = True,
+        batchnorm: bool = False,
+        nonlinearity: str = "leaky_relu",
+        use_eigeninit: Optional[bool] = False,
+    ):
+        super().__init__(
+            in_features=in_features,
+            latent_features=latent_features,
+            hidden_config=hidden_config,
+            bias=bias,
+            batchnorm=batchnorm,
+            nonlinearity=nonlinearity,
+        )
 
-        # Encode
-        phi_x = self._encode(x)
+        self.k_steps = k_steps
+        koopman_matrix = LinearLayer(
+            in_channels=latent_features,
+            out_channels=latent_features,
+            bias=False,
+            batchnorm=False,
+            nonlinearity=None,
+        )
+        if use_eigeninit:
+            eigeninit(koopman_matrix.components.linear.weight, theta=0.3)
 
-        # Reconstruct
-        x_recons = self._decode(phi_x)
+        # Rebuild container
+        # NOTE: Pytorch doesn't have a great way to insert into nn.Sequential
+        temp_container = nn.Sequential()
+        temp_container.add_module("encoder", self.components.encoder)
+        temp_container.add_module("koopman_matrix", koopman_matrix)
+        temp_container.add_module("decoder", self.components.decoder)
+        self.components = temp_container
 
-        ##########################################
-        # If you like slow code, you'll enjoy this!
-        # It stores all intermediate predictions
-        # but, we never actually use them, so off with its head.
-        ##########################################
+    def forward(self, x: float, intermediate=False, k=None):
+        phi_x = self.encode(x)
+        x_recons = self.decode(phi_x)
+
+        if k is None:
+            k = self.k_steps
+
+        # Stores all intermediate predictions
         if intermediate:
             # Advance latent variable k times
             prediction = [phi_x]
             for i in range(1, k + 1):
                 prev_pred = prediction[i - 1]
-                prediction.append(self.koopman_matrix(prev_pred))
+                prediction.append(self.components.koopman_matrix(prev_pred))
 
             # Batched decoding
             # Shape: [steps, batch, latent_dim]
@@ -188,100 +247,127 @@ class Autoencoder(BaseTorchModel):
             # Shape: [steps, batch, latent_dim]
             x_k = decoded.view(steps, batch_size, -1)
 
-        ##########################################
         # Faster way, but no intermediate stores
-        ##########################################
         else:
-            K_weight = self.koopman_matrix.linear_layer.weight
-            K_effective_weight = torch.linalg.matrix_power(K_weight, k)
-            # NOTE: this K is transposed because of how torch handles matrix multiplication!
+            K_effective_weight = torch.linalg.matrix_power(self.koopman_weights, k)
+            # NOTE: this K is transposed because of
+            # how torch handles matrix multiplication!
             x_k = phi_x @ K_effective_weight.T
-            x_k = self._decode(x_k)
+            x_k = self.decode(x_k)
 
             # For compatibility
             x_k = x_k.unsqueeze(0)
 
-        return AutoencoderResult(x_k, x_recons)
+        return KoopmanAutoencoderResult(x_k, x_recons)
 
-    def get_fwd_activations(self, detach=True) -> OrderedDict:
-        """Get forward activations."""
-        activations = OrderedDict()
-        for i, layer in enumerate(self.features):
-            if layer.is_hooked:
-                activations[i] = (
-                    layer.forward_activations if not detach else layer.forward_activations.detach()
-                )
+    @property
+    def koopman_weights(self):
+        return self.components.koopman_matrix.components.linear.weight
 
-        return activations
-
-    @classmethod
-    def load_model(
-        cls,
-        file_path: str | Path,
-        strict: bool = True,
-        remove_param: bool = True,
-        **kwargs,
-    ):
-        """Load model."""
-
-        # Assert path
-        assert Path(file_path).exists(), f"Model file {file_path} does not exist."
-
-        # Parse metadata
-        metadata = parse_safetensors_metadata(file_path=file_path)
-
-        # Load base model
-        model = cls(
-            input_dimension=literal_eval(metadata["input_dimension"]),
-            latent_dimension=literal_eval(metadata["latent_dimension"]),
-            nonlinearity=metadata["nonlinearity"],
-            k=literal_eval(metadata["steps"]),
-            batchnorm=literal_eval(metadata["batchnorm"]),
-            hidden_configuration=literal_eval(metadata["hidden_configuration"]),
-            rank=literal_eval(metadata["rank"]),
-            **kwargs,
+    def _get_basic_metadata(self) -> dict[str, Any]:
+        """Get model-specific metadata for serialization."""
+        metadata = super()._get_basic_metadata()
+        metadata.update(
+            {
+                "k_steps": self.k_steps,
+            }
         )
 
-        # Load weights
-        load_model(model, file_path, device=get_device(), strict=strict)
+        return metadata
 
-        # Remove parameterizations
-        if remove_param and torch.nn.utils.parametrize.is_parametrized(
-            model.koopman_matrix.linear_layer
-        ):
-            torch.nn.utils.parametrize.remove_parametrizations(
-                model.koopman_matrix.linear_layer, "weight"
-            )
 
-        return model, metadata
+class ExponentialKoopmanAutencoder(KoopmanAutoencoder):
+    """
+    Koopman autoencoder model with exp parameterization.
+    """
 
-    def save_model(self, file_path: str | Path, **kwargs):
-        """Save model."""
+    def __init__(
+        self,
+        k_steps: int,
+        in_features: int = 2,
+        latent_features: int = 4,
+        hidden_config: Optional[list[int]] = None,
+        bias: bool = True,
+        batchnorm: bool = False,
+        nonlinearity: str = "leaky_relu",
+        use_eigeninit: Optional[bool] = False,
+    ):
+        super().__init__(
+            k_steps,
+            in_features,
+            latent_features,
+            hidden_config,
+            bias,
+            batchnorm,
+            nonlinearity,
+            use_eigeninit,
+        )
 
-        metadata = {
-            "input_dimension": str(self.input_dimension),
-            "latent_dimension": str(self.latent_dimension),
-            "hidden_configuration": str(self.hidden_configuration),
-            "nonlinearity": str(self.nonlinearity),
-            "steps": str(self.steps),
-            "batchnorm": str(self.batchnorm),
-            "rank": str(self.rank),
-        }
+        parametrize.register_parametrization(
+            self.components.koopman_matrix.components.linear,
+            "weight",
+            MatrixExponential(
+                k_steps=k_steps,
+                latent_features=latent_features,
+            ),
+        )
 
-        for key, value in kwargs.items():
-            metadata[key] = str(value)
 
-        save_model(self, Path(file_path), metadata=metadata)
+class LowRankKoopmanAutoencoder(KoopmanAutoencoder):
+    """
+    Koopman autoencoder model with low rank parameterization.
+    """
+
+    def __init__(
+        self,
+        rank: int,
+        k_steps: int,
+        in_features: int = 2,
+        latent_features: int = 4,
+        hidden_config: Optional[list[int]] = None,
+        bias: bool = True,
+        batchnorm: bool = False,
+        nonlinearity: str = "leaky_relu",
+        use_eigeninit: Optional[bool] = False,
+    ):
+        super().__init__(
+            k_steps,
+            in_features,
+            latent_features,
+            hidden_config,
+            bias,
+            batchnorm,
+            nonlinearity,
+            use_eigeninit,
+        )
+        self.rank = rank
+
+        parametrize.register_parametrization(
+            self.components.koopman_matrix.components.linear,
+            "weight",
+            LowRankFactorization(n=latent_features, r=rank),
+        )
+
+    def _get_basic_metadata(self) -> dict[str, Any]:
+        """Get model-specific metadata for serialization."""
+        metadata = super()._get_basic_metadata()
+        metadata.update(
+            {
+                "rank": self.rank,
+            }
+        )
+
+        return metadata
 
 
 class MatrixExponential(nn.Module):
-    def __init__(self, k, dim):
+    def __init__(self, k_steps, latent_features):
         super().__init__()
-        self.k = k  # Number of steps
-        self.dim = dim
+        self.k_steps = k_steps  # Number of steps
+        self.latent_features = latent_features
 
     def forward(self, X):
-        return torch.matrix_exp(X / self.k)  # Scale M by 1/k
+        return torch.matrix_exp(X / self.k_steps)  # Scale M by 1/k
 
     # # Custom initialization function using matrix logarithm
     # def right_inverse(self, X):
@@ -296,42 +382,7 @@ class MatrixExponential(nn.Module):
     #     return torch.Tensor(log_matrix)
 
 
-class ExponentialKoopmanAutencoder(Autoencoder):
-    """
-    Autoencoder model.
-    """
-
-    def __init__(
-        self,
-        rank: int,
-        k: int,
-        input_dimension: int = 2,
-        latent_dimension: int = 4,
-        hidden_configuration: Optional[List[Int]] = None,
-        nonlinearity: str = "leakyrelu",
-        batchnorm: bool = False,
-    ):
-        super().__init__(
-            k,
-            input_dimension,
-            latent_dimension,
-            hidden_configuration,
-            nonlinearity,
-            batchnorm,
-            rank,
-        )
-
-        parametrize.register_parametrization(
-            self.koopman_matrix.linear_layer, "weight", MatrixExponential(k=k, dim=latent_dimension)
-        )
-
-
 class LowRankFactorization(nn.Module):
-    """
-    Parameterizes a matrix to be of rank r by factoring it into two matrices.
-    Similar to how the Symmetric class ensures symmetry, this ensures low rank.
-    """
-
     def __init__(self, n: int, r: int):
         super().__init__()
         self.n = n  # dimension of square matrix
@@ -350,35 +401,3 @@ class LowRankFactorization(nn.Module):
         right = torch.diag(torch.sqrt(S[: self.r])) @ Vh[: self.r, :]
         # Return in the format our forward method expects
         return torch.cat([left, right.t()], dim=1)
-
-
-class LowRankKoopmanAutoencoder(Autoencoder):
-    """
-    Autoencoder model.
-    """
-
-    def __init__(
-        self,
-        rank: int,
-        k: int,
-        input_dimension: int = 2,
-        latent_dimension: int = 4,
-        hidden_configuration: Optional[List[Int]] = None,
-        nonlinearity: str = "leakyrelu",
-        batchnorm: bool = False,
-    ):
-        super().__init__(
-            k,
-            input_dimension,
-            latent_dimension,
-            hidden_configuration,
-            nonlinearity,
-            batchnorm,
-            rank,
-        )
-
-        parametrize.register_parametrization(
-            self.koopman_matrix.linear_layer,
-            "weight",
-            LowRankFactorization(n=latent_dimension, r=rank),
-        )

@@ -26,7 +26,7 @@ wandb:
 autoencoder:
   ae_dim: 1_024
   hidden_config: []
-  ae_nonlinearity: "leakyrelu"
+  ae_nonlinearity: "leaky_relu"
   batchnorm: False
   lambda_reconstruction: 1
   lambda_prediction: 0.05

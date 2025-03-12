@@ -35,7 +35,7 @@ USER = os.environ.get("USER")
 def load_MLP(mlp_path):
     model, metadata = MLP.load_model(mlp_path)
     model.modules[-2].remove_nonlinearity()
-    # model.modules[-3].update_nonlinearity("leakyrelu")
+    # model.modules[-3].update_nonlinearity("leaky_relu")
     model.modules[-3].remove_nonlinearity()
     model.eval().hook_model()
     return model, metadata

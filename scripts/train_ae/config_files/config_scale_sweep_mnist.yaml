@@ -59,4 +59,4 @@ parameters:
       ae_dim:
         values: [128, 256, 512]
       ae_nonlinearity:
-        value: "leakyrelu"
+        value: "leaky_relu"

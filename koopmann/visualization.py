@@ -4,13 +4,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 import torch
-from jaxtyping import Float, Int
 from matplotlib.ticker import MaxNLocator
 from numpy import ndarray
 from torch import Tensor, nn
 
 from koopmann import aesthetics
-from koopmann.models.utils import pad_act
+
+# from koopmann.models.utils import pad_act
 
 # if TYPE_CHECKING:
 #     from pykoopman import Koopman
@@ -213,83 +213,83 @@ def plot_decision_boundary(
     return fig, ax
 
 
-def plot_koopman_decision_boundary(
-    model: nn.Module,  # PyTorch model
-    final_state_dict: dict,  # Final state dict of the model
-    autoencoder: nn.Module,  # Koopman autoencoder
-    X: torch.Tensor,  # Input data
-    y: torch.Tensor,  # Label vector
-    labels: list[int] = [0, 1],  # Labels
-    ax=None,
-) -> None:
-    # Use provided Axes or create a new one
-    if ax is None:
-        fig, ax = plt.subplots()
-    else:
-        fig = None  # No new figure created
+# def plot_koopman_decision_boundary(
+#     model: nn.Module,  # PyTorch model
+#     final_state_dict: dict,  # Final state dict of the model
+#     autoencoder: nn.Module,  # Koopman autoencoder
+#     X: torch.Tensor,  # Input data
+#     y: torch.Tensor,  # Label vector
+#     labels: list[int] = [0, 1],  # Labels
+#     ax=None,
+# ) -> None:
+#     # Use provided Axes or create a new one
+#     if ax is None:
+#         fig, ax = plt.subplots()
+#     else:
+#         fig = None  # No new figure created
 
-    aesthetics.set_equal_aspect(ax)
+#     aesthetics.set_equal_aspect(ax)
 
-    # Generate a color palette with as many colors as there are labels
-    colors = sns.color_palette("tab10", len(labels))
+#     # Generate a color palette with as many colors as there are labels
+#     colors = sns.color_palette("tab10", len(labels))
 
-    # Initialization
-    x_min, x_max = X[:, 0].min() - 0.1, X[:, 0].max() + 0.1
-    y_min, y_max = X[:, 1].min() - 0.1, X[:, 1].max() + 0.1
-    xx, yy = np.meshgrid(np.linspace(x_min, x_max, 100), np.linspace(y_min, y_max, 100))
-    x_in = np.c_[xx.ravel(), yy.ravel()]
-    x_in = torch.tensor(x_in, dtype=torch.float32).to(next(model.parameters()).device)
+#     # Initialization
+#     x_min, x_max = X[:, 0].min() - 0.1, X[:, 0].max() + 0.1
+#     y_min, y_max = X[:, 1].min() - 0.1, X[:, 1].max() + 0.1
+#     xx, yy = np.meshgrid(np.linspace(x_min, x_max, 100), np.linspace(y_min, y_max, 100))
+#     x_in = np.c_[xx.ravel(), yy.ravel()]
+#     x_in = torch.tensor(x_in, dtype=torch.float32).to(next(model.parameters()).device)
 
-    # Plot data points
-    for label, color in zip(labels, colors):
-        sns.scatterplot(
-            x=X[y == label, 0].cpu().numpy(),
-            y=X[y == label, 1].cpu().numpy(),
-            ax=ax,
-            color=color,
-            marker="o",
-            s=50,
-            label=f"Class {label}",
-        )
+#     # Plot data points
+#     for label, color in zip(labels, colors):
+#         sns.scatterplot(
+#             x=X[y == label, 0].cpu().numpy(),
+#             y=X[y == label, 1].cpu().numpy(),
+#             ax=ax,
+#             color=color,
+#             marker="o",
+#             s=50,
+#             label=f"Class {label}",
+#         )
 
-    # Load final model state and set to eval mode
-    model.load_state_dict(final_state_dict)
-    model.eval()
+#     # Load final model state and set to eval mode
+#     model.load_state_dict(final_state_dict)
+#     model.eval()
 
-    # Get predictions on grid points
-    with torch.no_grad():
-        _ = model.forward(x_in)
-        acts = model.get_fwd_activations()
+#     # Get predictions on grid points
+#     with torch.no_grad():
+#         _ = model.forward(x_in)
+#         acts = model.get_fwd_activations()
 
-    k = autoencoder.steps
-    all_pred = autoencoder(
-        x=pad_act(acts[0], target_size=autoencoder.encoder[0].in_features), k=k
-    ).predictions
-    y_pred = all_pred[k, :, : acts[4].size(-1)]
-    y_pred = torch.argmax(y_pred, dim=1).cpu().numpy().reshape(xx.shape)
+#     k = autoencoder.steps
+#     all_pred = autoencoder(
+#         x=pad_act(acts[0], target_size=autoencoder.encoder[0].in_features), k=k
+#     ).predictions
+#     y_pred = all_pred[k, :, : acts[4].size(-1)]
+#     y_pred = torch.argmax(y_pred, dim=1).cpu().numpy().reshape(xx.shape)
 
-    # Plot decision boundary
-    ax.contourf(
-        xx,
-        yy,
-        y_pred,
-        levels=np.arange(len(labels) + 1) - 0.5,  # Adjust levels for proper class separation
-        colors=colors,
-        alpha=0.5,
-    )
+#     # Plot decision boundary
+#     ax.contourf(
+#         xx,
+#         yy,
+#         y_pred,
+#         levels=np.arange(len(labels) + 1) - 0.5,  # Adjust levels for proper class separation
+#         colors=colors,
+#         alpha=0.5,
+#     )
 
-    ax.set_xlim(x_min, x_max)
-    ax.set_ylim(y_min, y_max)
+#     ax.set_xlim(x_min, x_max)
+#     ax.set_ylim(y_min, y_max)
 
-    plt.tick_params(
-        axis="both",  # Apply changes to both x-axis and y-axis
-        which="both",  # Affect both major and minor ticks
-        bottom=False,  # Turn off ticks along the bottom edge
-        top=False,  # Turn off ticks along the top edge
-        left=False,  # Turn off ticks along the left edge (y-axis)
-        right=False,  # Turn off ticks along the right edge (y-axis)
-        labelbottom=False,  # Turn off labels on the bottom edge (x-axis)
-        labelleft=False,  # Turn off labels on the left edge (y-axis)
-    )
+#     plt.tick_params(
+#         axis="both",  # Apply changes to both x-axis and y-axis
+#         which="both",  # Affect both major and minor ticks
+#         bottom=False,  # Turn off ticks along the bottom edge
+#         top=False,  # Turn off ticks along the top edge
+#         left=False,  # Turn off ticks along the left edge (y-axis)
+#         right=False,  # Turn off ticks along the right edge (y-axis)
+#         labelbottom=False,  # Turn off labels on the bottom edge (x-axis)
+#         labelleft=False,  # Turn off labels on the left edge (y-axis)
+#     )
 
-    return fig, ax
+#     return fig, ax

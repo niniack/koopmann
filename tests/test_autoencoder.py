@@ -1,49 +1,86 @@
 from pathlib import Path
 
+import pytest
 import torch
-from torch import testing
+from torch import nn, testing
 
-from koopmann.models.autoencoder import Autoencoder
+from koopmann.models.autoencoder import KoopmanAutoencoder, LowRankKoopmanAutoencoder
 
 
-def test_init_autoencoder():
-    latent_dimension = 20
-    autoencoder = Autoencoder(
-        input_dimension=5,
-        latent_dimension=latent_dimension,
-        nonlinearity="leakyrelu",
+@pytest.mark.parametrize("k_steps", [3, 8])
+@pytest.mark.parametrize("in_features", [2, 10])
+@pytest.mark.parametrize("latent_features", [15, 20])
+@pytest.mark.parametrize("bias", [True, False])
+@pytest.mark.parametrize("batchnorm", [True, False])
+@pytest.mark.parametrize("nonlinearity", ["relu", "leaky_relu"])
+def test_init_autoencoder(k_steps, in_features, latent_features, bias, batchnorm, nonlinearity):
+    autoencoder = KoopmanAutoencoder(
+        k_steps=k_steps,
+        in_features=in_features,
+        latent_features=latent_features,
+        bias=bias,
+        batchnorm=batchnorm,
+        nonlinearity=nonlinearity,
     )
 
-    for i in range(len(autoencoder.encoder)):
-        # # Assert no batchnorm
-        # assert autoencoder.encoder[i].batchnorm_layer is None
-        # assert autoencoder.decoder[i].batchnorm_layer is None
+    for i in range(len(autoencoder.components.encoder)):
+        encoder_layer = autoencoder.components.encoder[i]
+        decoder_layer = autoencoder.components.decoder[-i]
 
-        # # Assert bias exists
-        # assert autoencoder.encoder[i].linear_layer.bias is not None
-        # assert autoencoder.decoder[i].linear_layer.bias is not None
+        # Check batchnorm
+        if batchnorm:
+            assert isinstance(encoder_layer.components.batchnorm, nn.BatchNorm1d)
+            assert isinstance(encoder_layer.components.batchnorm, nn.BatchNorm1d)
+        else:
+            with pytest.raises(AttributeError):
+                _ = encoder_layer.components.batchnorm
+                _ = decoder_layer.components.batchnorm
 
-        # Assert no hooks
-        assert autoencoder.encoder[i].is_hooked is False
-        assert autoencoder.decoder[i].is_hooked is False
+        # Check bias
+        if bias:
+            assert encoder_layer.components.linear.bias is not None
+            assert decoder_layer.components.linear.bias is not None
+        else:
+            assert encoder_layer.components.linear.bias is None
+            assert decoder_layer.components.linear.bias is None
 
-    # Assert Koopman matrix shape
-    assert autoencoder.koopman_matrix.linear_layer.weight.shape == torch.Size(
-        [latent_dimension, latent_dimension]
-    )
+    # Koopman matrix shape
+    assert autoencoder.koopman_weights.shape == torch.Size([latent_features, latent_features])
 
 
 def test_save_load_autoencoder(tmp_path):
-    autoencoder = Autoencoder(
-        input_dimension=5,
-        latent_dimension=20,
-        nonlinearity="leakyrelu",
+    autoencoder = KoopmanAutoencoder(
+        k_steps=2,
+        in_features=2,
+        latent_features=5,
+        bias=True,
+        batchnorm=True,
+        nonlinearity="leaky_relu",
     )
 
     path = Path.joinpath(tmp_path, "autoencoder.safetensors")
     autoencoder.save_model(path)
-    ae_loaded = Autoencoder.load_model(file_path=path)
+    ae_loaded, _ = KoopmanAutoencoder.load_model(file_path=path)
 
-    testing.assert_close(
-        ae_loaded.koopman_matrix.linear_layer.weight, autoencoder.koopman_matrix.linear_layer.weight
+    testing.assert_close(ae_loaded.koopman_weights, autoencoder.koopman_weights)
+
+
+def test_save_load_param_autoencoder(tmp_path):
+    rank = 1
+    autoencoder = LowRankKoopmanAutoencoder(
+        rank=1,
+        k_steps=2,
+        in_features=2,
+        latent_features=5,
+        bias=True,
+        batchnorm=True,
+        nonlinearity="leaky_relu",
     )
+
+    path = Path.joinpath(tmp_path, "autoencoder.safetensors")
+    autoencoder.save_model(path)
+    ae_loaded, _ = LowRankKoopmanAutoencoder.load_model(file_path=path)
+
+    testing.assert_close(ae_loaded.koopman_weights, autoencoder.koopman_weights)
+
+    assert ae_loaded.rank == autoencoder.rank == rank

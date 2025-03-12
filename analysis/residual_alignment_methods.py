@@ -279,7 +279,7 @@ def randomevd(mm, d, k, l, its=0, device="cuda"):
 # E = 5
 # ITS = 1
 # K = 30
-K = 30
+K = 12
 L = 20
 E = 5
 ITS = 20
@@ -336,6 +336,7 @@ def trajectory(h, fh, title, device):
 
 def jacobian(output, input, device):
     J = []
+    print(input.shape)
     for i in range(output.numel()):
         I = torch.zeros_like(output)
         ind = np.unravel_index(i, I.shape)

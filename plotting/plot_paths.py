@@ -18,14 +18,15 @@ from koopmann.data import (
     create_data_loader,
     get_dataset_class,
 )
+from koopmann.mixins.serializable import Serializable
 from koopmann.models import MLP, ExponentialKoopmanAutencoder
-from koopmann.models.utils import get_device, parse_safetensors_metadata
+from koopmann.utils import get_device
 
 
 def get_dataloader(model_file_path: str, batch_size: int = 5_000):
     """Prepare dataloader."""
     # Dataset config
-    metadata = parse_safetensors_metadata(file_path=model_file_path)
+    metadata = Serializable.parse_safetensors_metadata(file_path=model_file_path)
     dataset_config = DatasetConfig(
         dataset_name=metadata["dataset"],
         num_samples=batch_size,

@@ -9,7 +9,6 @@ from typing import Any, Callable, Literal, Tuple
 
 import numpy as np
 import torch
-from jaxtyping import Bool, Float, Int
 from PIL import Image
 from pydantic import BaseModel, ConfigDict
 from torch.utils.data import DataLoader, Dataset
@@ -44,18 +43,6 @@ def get_dataset_class(name: str) -> Dataset:
     return getattr(sys.modules[__name__], name)
 
 
-def create_data_loader(
-    dataset: Dataset, batch_size: Int, global_seed: Int = 0, shuffle: bool = True
-) -> DataLoader:
-    loader = DataLoader(
-        dataset,  # type: ignore
-        batch_size=batch_size,
-        shuffle=shuffle,
-        num_workers=8,
-    )
-    return loader
-
-
 class BaseYinYangDataset(Dataset):
     """
     A YinYang inspired dataset, adapted from: \\
@@ -65,11 +52,11 @@ class BaseYinYangDataset(Dataset):
     def __init__(
         self,
         config: DatasetConfig,
-        binary: Bool = False,
-        dots: Bool = True,  # Overriden to True if binary is True
-        r_small: Float = 0.1,
-        r_big: Float = 0.5,
-        rotate: Bool = False,
+        binary: bool = False,
+        dots: bool = True,  # Overriden to True if binary is True
+        r_small: float = 0.1,
+        r_big: float = 0.5,
+        rotate: bool = False,
     ):
         super().__init__()
         # using a numpy RNG to allow compatibility to other deep learning frameworks
@@ -460,7 +447,7 @@ class CIFAR10Dataset(datasets.CIFAR10):
             transforms.Normalize(
                 mean=(0.4914, 0.4822, 0.4465),  # Mean for CIFAR-10
                 std=(0.2470, 0.2435, 0.2616),  # Standard deviation for CIFAR-10
-            ),  # Normalize inputs
+            ),
         ]
     )
 

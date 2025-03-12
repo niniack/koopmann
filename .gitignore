@@ -9,3 +9,5 @@ logs/
 wandb/
 *.sh
 *slurm*
+*.png
+*.jpeg

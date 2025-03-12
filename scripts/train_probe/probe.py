@@ -6,19 +6,19 @@ from typing import Optional, Union
 
 import fire
 import torch
+import wandb
 from config_def import Config
 from torch import nn, optim
 from torch.nn import Module
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 
-import wandb
 from koopmann.data import create_data_loader, get_dataset_class
 from koopmann.log import logger
 from koopmann.models import MLP, ResMLP
 from koopmann.models.utils import get_device
 from koopmann.utils import compute_model_accuracy
-from scripts.common import get_parameter_groups, setup_config
+from scripts.utils import get_parameter_groups, setup_config
 
 
 def train_one_epoch(

@@ -31,8 +31,8 @@ def get_model(config, dataset_features):
             in_features=dataset_features,
             out_features=config.model.out_features,
             hidden_config=config.model.hidden_neurons,
-            bias=False,
-            batchnorm=True,
+            bias=config.model.bias,
+            batchnorm=config.model.batchnorm,
             nonlinearity="relu",
         )
     else:
@@ -40,8 +40,8 @@ def get_model(config, dataset_features):
             in_features=dataset_features,
             out_features=config.model.out_features,
             hidden_config=config.model.hidden_neurons,
-            bias=False,
-            batchnorm=True,
+            bias=config.model.bias,
+            batchnorm=config.model.batchnorm,
             nonlinearity="relu",
         )
 

@@ -45,7 +45,6 @@ class Autoencoder(BaseTorchModel):
         self.bias = bias
         self.batchnorm = batchnorm
         self.nonlinearity = nonlinearity
-        self.scaler = AdaptiveScaler()
         # Warning
         if latent_features <= in_features:
             warnings.warn(

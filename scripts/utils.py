@@ -167,36 +167,59 @@ def compute_neural_collapse_metrics(model, config, dataloader, device):
 
 
 def separate_param_groups(model, weight_decay):
-    """
-    Separates parameters into groups with and without weight decay
-    without relying on model.modules.
-    """
-    decay = []
-    no_decay = []
-    bn_params = set()
+    decay_params = []
+    no_decay_params = []
 
-    # Recursive function to identify BatchNorm layers
-    def find_bn_parameters(module):
-        if isinstance(module, (torch.nn.BatchNorm1d, torch.nn.BatchNorm2d)):
-            bn_params.update(module.parameters())
+    # Track parameters we've seen to avoid duplicates
+    seen_params = set()
 
-        # Use children() method to iterate through direct children
-        for child in module.children():
-            find_bn_parameters(child)
+    # First, scan through the model's modules to categorize parameters
+    for module_name, module in model.named_modules():
+        # Skip the root module
+        if module_name == "":
+            continue
 
-    # Start recursive search from the model
-    find_bn_parameters(model)
+        # Skip Koopman modules entirely
+        if "koopman" in module_name.lower():
+            for param_name, param in module.named_parameters(recurse=False):
+                full_name = f"{module_name}.{param_name}"
+                if param.requires_grad and id(param) not in seen_params:
+                    no_decay_params.append(param)
+                    seen_params.add(id(param))
+            continue
 
-    # Categorize all parameters
+        # Skip BatchNorm modules entirely
+        if isinstance(module, (torch.nn.BatchNorm1d, torch.nn.BatchNorm2d, torch.nn.BatchNorm3d)):
+            for param_name, param in module.named_parameters(recurse=False):
+                full_name = f"{module_name}.{param_name}"
+                if param.requires_grad and id(param) not in seen_params:
+                    no_decay_params.append(param)
+                    seen_params.add(id(param))
+            continue
+
+        # For other modules, exclude biases
+        for param_name, param in module.named_parameters(recurse=False):
+            full_name = f"{module_name}.{param_name}"
+            if param.requires_grad and id(param) not in seen_params:
+                if "bias" in param_name.lower():
+                    no_decay_params.append(param)
+                    seen_params.add(id(param))
+                else:
+                    decay_params.append(param)
+                    seen_params.add(id(param))
+
+    # Check for any parameters we missed (can happen with custom parameter registrations)
     for name, param in model.named_parameters():
-        if any(param is bn_param for bn_param in bn_params):
-            no_decay.append(param)
-        else:
-            decay.append(param)
+        if param.requires_grad and id(param) not in seen_params:
+            if "koopman" in name.lower() or "bias" in name.lower() or "bn" in name.lower():
+                no_decay_params.append(param)
+            else:
+                decay_params.append(param)
+            seen_params.add(id(param))
 
     return [
-        {"params": decay, "weight_decay": weight_decay},
-        {"params": no_decay, "weight_decay": 0.0},
+        {"params": decay_params, "weight_decay": weight_decay},
+        {"params": no_decay_params, "weight_decay": 0.0},
     ]
 
 

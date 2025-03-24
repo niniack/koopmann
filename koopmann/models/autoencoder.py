@@ -11,6 +11,7 @@ from typing import Any, Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.nn.utils.parametrize as parametrize
 from torch import Tensor
 
@@ -20,50 +21,6 @@ from koopmann.models.utils import eigeninit
 
 VanillaAutoencoderResult = namedtuple("VanillaAutoencoderResult", "latent reconstruction")
 KoopmanAutoencoderResult = namedtuple("KoopmanAutoencoderResult", "predictions reconstruction")
-
-
-class AdaptiveScaler(nn.Module):
-    def __init__(self, initial_min=0.0, initial_max=5.0, momentum=0.99):
-        super().__init__()
-        # Register buffers for global statistics (updated with EMA)
-        self.register_buffer("global_mean", torch.tensor(0.0, dtype=torch.float))
-        self.register_buffer("global_std", torch.tensor(1.0, dtype=torch.float))
-        self.register_buffer("momentum", torch.tensor(momentum, dtype=torch.float))
-        self.register_buffer("initialized", torch.tensor(False, dtype=torch.bool))
-
-    def preprocess(self, x):
-        return x
-        # Update statistics with EMA during training
-        if self.training:
-            with torch.no_grad():
-                batch_mean = torch.mean(x)
-                batch_std = torch.std(x) + 1e-6  # avoid division by zero
-
-                if not self.initialized:
-                    # First batch - initialize with current batch statistics
-                    self.global_mean = batch_mean
-                    self.global_std = batch_std
-                    self.initialized.fill_(True)
-                else:
-                    # Update with EMA
-                    self.global_mean = (
-                        self.momentum * self.global_mean + (1 - self.momentum) * batch_mean
-                    )
-                    self.global_std = (
-                        self.momentum * self.global_std + (1 - self.momentum) * batch_std
-                    )
-
-        # Apply standardization - less disruptive to linear dynamics than min-max
-        return (x - self.global_mean) / self.global_std
-
-    def postprocess(self, x):
-        return x
-        # Reverse standardization
-        return x * self.global_std + self.global_mean
-
-    def update_statistics(self):
-        # No need for separate update step with this approach
-        pass
 
 
 class Autoencoder(BaseTorchModel):
@@ -150,15 +107,11 @@ class Autoencoder(BaseTorchModel):
         return decoder
 
     def encode(self, x):
-        ## Pre-encoder bias
-        # x_bar = x - self.decoder[-1].linear_layer.bias
-        x = self.scaler.preprocess(x)
         x = self.components.encoder(x)
         return x
 
     def decode(self, x):
         x = self.components.decoder(x)
-        x = self.scaler.postprocess(x)
         return x
 
     def forward(self, x: float):

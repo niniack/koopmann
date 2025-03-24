@@ -17,6 +17,7 @@ class StringtoClassNonlinearity(Enum):
     sigmoid = nn.Sigmoid
     gelu = nn.GELU
     tanh = nn.Tanh
+    elu = nn.ELU
 
 
 def eigeninit(weight: torch.Tensor, theta: float = 0.7) -> None:

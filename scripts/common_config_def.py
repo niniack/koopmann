@@ -26,5 +26,5 @@ class OptimConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     type: OptimParam
     weight_decay: NonNegativeFloat
-    num_epochs: PositiveInt | None = None
+    num_epochs: NonNegativeInt
     learning_rate: PositiveFloat

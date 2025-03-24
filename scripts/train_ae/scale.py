@@ -1,5 +1,6 @@
 import copy
 import os
+import pdb
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Union
@@ -12,6 +13,7 @@ from config_def import Config, KoopmanParam
 from torch.utils.data import DataLoader
 
 import wandb
+from analysis.adv_attacks import adv_attack
 from koopmann.log import logger
 from koopmann.models import (
     MLP,
@@ -23,11 +25,11 @@ from koopmann.models import (
 from koopmann.utils import get_device
 from scripts.train_ae.losses import (
     calculate_replacement_error,
+    compute_eigenvector_shaping_loss,
     compute_isometric_loss,
     compute_k_prediction_loss,
     compute_latent_space_prediction_loss,
     compute_state_space_recons_loss,
-    linear_warmup,
 )
 from scripts.utils import (
     get_dataloaders,
@@ -65,14 +67,14 @@ def get_autoencoder(
     autoencoder_kwargs = {
         "k_steps": config.scale.num_scaled_layers,
         # "in_features": model.components[config.scale.scale_location].in_channels,
-        "in_features": 512,  # TODO: FIX!!!!!!!!!!
+        "in_features": 784,  # TODO: FIX!!!!!!!!!!
         "latent_features": config.autoencoder.ae_dim,
         "hidden_config": config.autoencoder.hidden_config,
         "batchnorm": config.autoencoder.batchnorm,
         "bias": True,
         "rank": config.autoencoder.koopman_rank,
         "nonlinearity": config.autoencoder.ae_nonlinearity,
-        "use_eigeninit": True,
+        "use_eigeninit": False,
     }
 
     if config.autoencoder.koopman_param == KoopmanParam.exponential:
@@ -116,7 +118,14 @@ def extract_activations(
     first_key, first_value = next(iter(all_acts.items()))
     last_key, last_value = list(all_acts.items())[last_index]
 
-    return OrderedDict({first_key: first_value, last_key: last_value}), last_index, first_value
+    # # # Z-score activations
+    # first_value = first_value - first_value.mean(dim=1, keepdim=True)
+    # first_value = (first_value / torch.norm(first_value, "fro")) * 100
+
+    # last_value = last_value - last_value.mean(dim=1, keepdim=True)
+    # last_value = (last_value / torch.norm(last_value, "fro")) * 100
+
+    return OrderedDict({first_key: first_value, last_key: last_value})
 
 
 class DotDict(dict):
@@ -148,7 +157,8 @@ class AutoencoderMetrics:
             self.batch_metrics[f"raw_{name}"] = torch.tensor(0.0, device=get_device())
             self.batch_metrics[f"fvu_{name}"] = torch.tensor(0.0, device=get_device())
 
-        self.batch_metrics["replacement_error"] = torch.tensor(0.0, device=get_device())
+        # self.batch_metrics["replacement_error"] = torch.tensor(0.0, device=get_device())
+        self.batch_metrics["shaping_loss"] = torch.tensor(0.0, device=get_device())
         self.batch_metrics["combined_loss"] = torch.tensor(0.0, device=get_device())
 
         self.total_metrics = copy.deepcopy(self.batch_metrics)
@@ -171,9 +181,7 @@ class AutoencoderMetrics:
             _ = model(input)
 
             # Get activations
-            first_last_acts, last_index, first_value = extract_activations(
-                model, input, config, is_probed
-            )
+            first_last_acts = extract_activations(model, input, config, is_probed)
             k_steps = config.scale.num_scaled_layers
 
             for name, method in self.metric_to_method_dict.items():
@@ -195,6 +203,10 @@ class AutoencoderMetrics:
             #     label=label,
             #     k_steps=k_steps,
             # )
+
+            self.batch_metrics["shaping_loss"] = compute_eigenvector_shaping_loss(
+                first_last_acts, autoencoder, label
+            )
 
         # Update totals
         self.num_batches += 1
@@ -245,7 +257,6 @@ def eval_autoencoder(model, autoencoder, test_loader, config, is_probed, epoch):
 
     # Calculate averages
     avg_metrics = autoencoder_metrics.compute()
-
     autoencoder_metrics.log_metrics(epoch, "eval")
 
     return avg_metrics
@@ -253,18 +264,6 @@ def eval_autoencoder(model, autoencoder, test_loader, config, is_probed, epoch):
 
 def train_one_epoch(model, autoencoder, train_loader, device, optimizer, config, is_probed, epoch):
     """Train autoencoder for one epoch."""
-
-    # # Initialize effective weights
-    # effective_state_pred_weight = linear_warmup(
-    #     epoch=epoch,
-    #     end_epoch=config.optim.num_epochs,
-    #     final_value=config.autoencoder.lambda_prediction,
-    # )
-    # effective_latent_pred_weight = linear_warmup(
-    #     epoch=epoch,
-    #     end_epoch=config.optim.num_epochs,
-    #     final_value=config.autoencoder.lambda_id,
-    # )
 
     # Initialize metrics tracker
     metrics = AutoencoderMetrics()
@@ -285,9 +284,10 @@ def train_one_epoch(model, autoencoder, train_loader, device, optimizer, config,
         # Calculate combined loss using tensor values
         loss = (
             config.autoencoder.lambda_reconstruction * metrics.batch_metrics.fvu_reconstruction
-            + config.autoencoder.lambda_prediction * metrics.batch_metrics.fvu_state_pred
-            + config.autoencoder.lambda_id * metrics.batch_metrics.raw_latent_pred
-            + 0.1 * metrics.batch_metrics.fvu_distance
+            + config.autoencoder.lambda_state_pred * metrics.batch_metrics.fvu_state_pred
+            + config.autoencoder.lambda_latent_pred * metrics.batch_metrics.raw_latent_pred
+            + config.autoencoder.lambda_isometric * metrics.batch_metrics.fvu_distance
+            # + 1e-3 * metrics.batch_metrics.shaping_loss
         )
 
         # Track combined loss
@@ -381,9 +381,29 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]] = None):
                 f"Epoch {epoch + 1}/{config.optim.num_epochs}, "
                 f"Train Loss: {losses['combined_loss']:.4f}"
             )
-
     # Save model
     ae_path = save_autoencoder(autoencoder, config, flavor)
+
+    # # Test adversarial robustness
+    # adv_results = adv_attack(
+    #     dataset=test_dataset,
+    #     model=model,
+    #     autoencoder=autoencoder,
+    #     scale_idx=config.scale.scale_location,
+    #     k_steps=config.scale.num_scaled_layers,
+    #     device=device,
+    # )
+
+    # for attack_name, scenarios_results in adv_results.items():
+    #     # Process each scenario (adv_original_acc_original, adv_original_acc_autoencoder, etc.)
+    #     for scenario_name, epsilon_results in scenarios_results.items():
+    #         # For each epsilon value, log the accuracy
+    #         for epsilon, accuracy in epsilon_results.items():
+    #             # Create a descriptive metric name
+    #             metric_name = f"{attack_name}/{scenario_name}"
+
+    #             # Log both the epsilon and accuracy
+    #             wandb.log({f"{attack_name}/epsilon": epsilon, metric_name: accuracy})
 
     wandb.finish()
 

@@ -34,8 +34,9 @@ class AutoencoderConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     ae_dim: PositiveInt
     lambda_reconstruction: NonNegativeFloat
-    lambda_prediction: NonNegativeFloat
-    lambda_id: NonNegativeFloat
+    lambda_state_pred: NonNegativeFloat
+    lambda_latent_pred: NonNegativeFloat
+    lambda_isometric: NonNegativeFloat
     batchnorm: bool
     hidden_config: List[PositiveInt]
     koopman_param: Optional[KoopmanParam] = None

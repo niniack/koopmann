@@ -5,28 +5,6 @@ import torch.nn.functional as F
 from torch import linalg
 
 
-def linear_warmup(
-    epoch: int,
-    final_value: float,
-    end_epoch: int,
-    start_epoch: int = 0,
-) -> float:
-    """
-    Linearly scale from 0.0 to final_value across [start_epoch, end_epoch].
-    - If epoch < start_epoch: return 0.0
-    - If epoch >= end_epoch: return final_value
-    - Else: scale linearly
-    """
-    if epoch < start_epoch:
-        return 0.0
-    elif epoch >= end_epoch:
-        return final_value
-    else:
-        # Fraction of the way from start_epoch to end_epoch
-        alpha = (epoch - start_epoch) / float(end_epoch - start_epoch)
-        return alpha * final_value
-
-
 ########################## K-Step Loss (Latent Space) ##########################
 def compute_latent_space_prediction_loss(act_dict, autoencoder, k, probed) -> tuple:
     """
@@ -51,25 +29,21 @@ def _latent_prediction_loss(act_dict, autoencoder, k) -> tuple:
     # latent_acts = latent_acts.detach()
 
     # Koopman step: multiply the *first* layer’s latent by K^k
-    # NOTE: this K used to be transposed.
-    K = autoencoder.koopman_weights.T
-    embedded_act = latent_acts[:, 0, :] @ linalg.matrix_power(K, autoencoder.k_steps)
+    K_matrix = autoencoder.koopman_weights.T
+    embedded_act = latent_acts[:, 0, :] @ linalg.matrix_power(K_matrix, autoencoder.k_steps)
 
     # Compare predicted embedding with the *last-layer* embedding
     # Square the difference, average across batch
-    latent_error = (embedded_act - latent_acts[:, -1, :]).pow(2).mean(dim=0)  # shape: [latent]
+    latent_error = (embedded_act - latent_acts[:, -1, :]).pow(2).mean(dim=[0, 1])  # shape: [1]
 
     # Total variance in final layer’s latent
     latent_last_centered_acts = latent_acts[:, -1, :] - latent_acts[:, -1, :].mean(dim=0)
-    total_variance_latent_space = latent_last_centered_acts.pow(2).mean(dim=0)  # shape: [latent]
+    # shape: [1]
+    total_variance_latent_space = latent_last_centered_acts.pow(2).mean(dim=[0, 1])
 
-    # Average FVU across latent dimension
-    avg_fvu = (latent_error / total_variance_latent_space).mean()
+    fvu = latent_error / total_variance_latent_space
 
-    # Average MSE across latent dimension
-    avg_mse = latent_error.mean()
-
-    return avg_mse, avg_fvu
+    return latent_error, fvu
 
 
 ########################## K-Step Prediction Loss (State Space) ##########################
@@ -92,18 +66,14 @@ def _k_prediction_loss(act_dict, autoencoder, k) -> tuple:
 
     # The final prediction is stored at all_preds[-1].
     pred_k = all_preds[-1, :, : target_acts.size(-1)]
-    state_space_pred_error = (pred_k - target_acts).pow(2).mean(dim=0)  # shape: [neurons]
+    state_space_pred_error = (pred_k - target_acts).pow(2).mean(dim=[0, 1])  # shape: [1]
 
     # Total variance
-    total_variance = (target_acts - target_acts.mean(dim=0)).pow(2).mean(dim=0)  # shape: [neurons]
+    total_variance = (target_acts - target_acts.mean(dim=0)).pow(2).mean(dim=[0, 1])  # shape: [1]
 
-    # Average FVU across neuron dimension
-    avg_fvu = (state_space_pred_error / total_variance).mean()
+    fvu = state_space_pred_error / total_variance
 
-    # Average MSE across neuron dimension
-    avg_mse = state_space_pred_error.mean()
-
-    return avg_mse, avg_fvu
+    return state_space_pred_error, fvu
 
 
 #################################### Reconstruction Loss ####################################
@@ -119,13 +89,13 @@ def _padding_recons_loss(act_dict, autoencoder) -> tuple:
     Computes the reconstruction loss in the *state space* across all layers.
     Returns reconstruction MSE scaled by total variance (aross all layers).
     """
+
     # Prepare padded activations and masks
-    # shape: [batch, layer, norms]
     padded_acts, masks = prepare_padded_acts_and_masks(act_dict, autoencoder)
 
     # Stack along layers dimension
     padded_acts = torch.stack(padded_acts, dim=1)  # shape: [batch, layers, neurons]
-    masks = torch.stack(masks, dim=0)  # shape: [layers, neurons]
+    masks = torch.stack(masks, dim=0).unsqueeze(dim=0)  # shape: [1, layers, neurons]
 
     # Reconstruct each layer’s padded activation (k=0 => no Koopman stepping)
     recons_acts = [
@@ -136,39 +106,41 @@ def _padding_recons_loss(act_dict, autoencoder) -> tuple:
     recons_acts = torch.stack(recons_acts, dim=1)
 
     # MSE in state space, ignoring masked-out neurons
-    masked_diff = (padded_acts - recons_acts) * masks.unsqueeze(dim=0)
-    recons_error = masked_diff.pow(2).sum()
+    masked_diff = (padded_acts - recons_acts) * masks
+    recons_error = masked_diff.pow(2).mean(dim=[0, 2])  # [layers]
 
     # Total variance in state space
-    masked_centered_acts = (padded_acts - padded_acts.mean(dim=0)) * masks.unsqueeze(dim=0)
-    total_variance_state_space = masked_centered_acts.pow(2).sum()
+    masked_centered_acts = (padded_acts - padded_acts.mean(dim=[0], keepdim=True)) * masks
+    total_variance_state_space = masked_centered_acts.pow(2).mean(dim=[0, 2])  # [layers]
 
     # Return ratio = (MSE) / (variance)
-    return recons_error, recons_error / total_variance_state_space
+    return recons_error.sum(), (recons_error / total_variance_state_space).mean()
 
 
 def _probing_recons_loss(act_dict, autoencoder) -> tuple:
-    # Activations
-    acts = torch.stack(list(act_dict.values()), dim=1)  # [batch, layers, neurons]
-    batch_size, num_layers, num_neurons = acts.shape
+    raise NotImplementedError()
 
-    # Reconstruct each layer
-    recons = torch.stack(
-        [autoencoder(acts[:, i, :], k=0).reconstruction for i in range(num_layers)], dim=1
-    )
-    recons_error = (recons - acts).pow(2).mean(dim=0)  # [layers, neurons]
+    # # Activations
+    # acts = torch.stack(list(act_dict.values()), dim=1)  # [batch, layers, neurons]
+    # batch_size, num_layers, num_neurons = acts.shape
 
-    # Variance per layer
-    total_variance = (acts - acts.mean(dim=0)).pow(2).mean(dim=0)  # [layers, neurons]
-    total_variance += 1e-8
+    # # Reconstruct each layer
+    # recons = torch.stack(
+    #     [autoencoder(acts[:, i, :], k=0).reconstruction for i in range(num_layers)], dim=1
+    # )
+    # recons_error = (recons - acts).pow(2).mean(dim=0)  # [layers, neurons]
 
-    # Average FVU across latent dimension
-    avg_fvu = (recons_error / total_variance).mean(dim=1).sum()
+    # # Variance per layer
+    # total_variance = (acts - acts.mean(dim=0)).pow(2).mean(dim=0)  # [layers, neurons]
+    # total_variance += 1e-8
 
-    # Average MSE across latent dimension
-    avg_mse = recons_error.mean(dim=1).sum()
+    # # Average FVU across latent dimension
+    # avg_fvu = (recons_error / total_variance).mean(dim=1).sum()
 
-    return avg_mse, avg_fvu
+    # # Average MSE across latent dimension
+    # avg_mse = recons_error.mean(dim=1).sum()
+
+    # return avg_mse, avg_fvu
 
 
 ########################## Eigenvalue Loss##########################
@@ -240,7 +212,7 @@ def compute_eigenloss(act_dict, autoencoder, k, probed) -> tuple:
     return (static_eigen_loss, static_eigen_loss)
 
 
-########################## Isometric Loss##########################
+########################## Isometric Loss ##########################
 def compute_isometric_loss(act_dict, autoencoder, k, probed) -> tuple:
     padded_acts, _ = prepare_padded_acts_and_masks(act_dict, autoencoder)
     starting_acts = padded_acts[0]  # shape: [batch, neurons]
@@ -250,11 +222,6 @@ def compute_isometric_loss(act_dict, autoencoder, k, probed) -> tuple:
     encoded_starting = autoencoder.components.encoder(starting_acts)
     encoded_target = autoencoder.components.encoder(target_acts)
 
-    # Compute latent predictions
-    # encoded_preds = encoded_starting @ torch.linalg.matrix_power(
-    #     autoencoder.koopman_weights.T, autoencoder.k_steps
-    # )
-
     # Pairwise distances for starting
     start_dists = torch.cdist(starting_acts, starting_acts)
     enc_start_dists = torch.cdist(encoded_starting, encoded_starting)
@@ -263,26 +230,62 @@ def compute_isometric_loss(act_dict, autoencoder, k, probed) -> tuple:
     target_dists = torch.cdist(target_acts, target_acts)
     enc_target_dists = torch.cdist(encoded_target, encoded_target)
 
-    # Pairwise distances for predicted
-    # enc_pred_dists = torch.cdist(encoded_preds, encoded_preds)
-
     # Isometric errors
     start_iso_error = (enc_start_dists - start_dists).pow(2).mean()
     target_iso_error = (enc_target_dists - target_dists).pow(2).mean()
-    # target_iso_error += (enc_pred_dists - target_dists).pow(2).mean()
     iso_error = start_iso_error + target_iso_error
 
     # Variance for normalization
     start_variance = start_dists.var()
     target_variance = target_dists.var()
-    total_variance = start_variance + target_variance
 
-    # FVU (Fraction of Variance Unexplained)
-    iso_fvu = iso_error / (total_variance + 1e-8)
+    # FVU (Fraction of Variance Unexplained) for each component
+    start_fvu = start_iso_error / (start_variance + 1e-8)
+    target_fvu = target_iso_error / (target_variance + 1e-8)
 
-    return iso_error, iso_fvu
+    # Average FVU
+    iso_fvu = (start_fvu + target_fvu) / 2.0
+
+    return iso_error, iso_fvu.mean()
 
 
+########################## Shaping Loss ##########################
+def compute_eigenvector_shaping_loss(act_dict, autoencoder, labels) -> torch.Tensor:
+    act_list = list(act_dict.values())
+    final_acts = act_list[-1]
+
+    # Get class representatives
+    unique_labels = torch.unique(labels)
+    first_indices = torch.tensor([torch.where(labels == lbl)[0][0].item() for lbl in unique_labels])
+
+    # Encode and normalize
+    target_directions = autoencoder.encode(final_acts[first_indices]).detach()
+    target_directions = target_directions / torch.norm(target_directions, dim=1, keepdim=True)
+
+    # Koopman matrix
+    K_matrix = autoencoder.koopman_weights.T
+
+    # Calculate cosine similarity between t^T K and t^T
+    loss = 0.0
+    for target in target_directions:
+        # Apply Koopman matrix: t^T K
+        transformed = target @ K_matrix
+
+        # Normalize transformed vector for cosine similarity
+        transformed_norm = transformed / (torch.norm(transformed) + 1e-8)  # Avoid division by zero
+
+        # Cosine similarity (absolute value to handle possible sign flips)
+        cos_sim = torch.abs(torch.dot(transformed_norm, target))
+
+        # Loss: 1 - cos_sim (perfect alignment gives 0 loss)
+        residual = 1 - cos_sim
+
+        loss += residual
+
+    return loss
+
+
+########################## Replacement ##########################
 def calculate_replacement_error(autoencoder, model, first_value, last_index, label, k_steps):
     """Calculate replacement error."""
     pred_act = autoencoder(first_value, k=k_steps).predictions[-1]

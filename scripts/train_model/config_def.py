@@ -18,6 +18,8 @@ class ModelConfig(BaseModel):
     residual: bool
     out_features: PositiveInt
     hidden_neurons: list[PositiveInt]
+    bias: bool
+    batchnorm: bool
 
 
 class Config(BaseModel):

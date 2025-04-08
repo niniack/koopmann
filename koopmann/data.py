@@ -375,6 +375,8 @@ class MNISTDataset(datasets.MNIST):
         self.config = config
         self.in_features = 784
         self.labels = self.targets
+        self.mean = 0.1307
+        self.std = 0.3081
 
     def name(self):
         return "MNISTDataset"

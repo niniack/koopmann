@@ -7,14 +7,14 @@ train_data:
   negative_label: false
 
 optim:
-  num_epochs: 1_000
+  num_epochs: 500
   learning_rate: 1e-3
-  weight_decay: 1e-1
+  weight_decay: 1e-4
   type: "adamw"
 
 scale:
   model_to_scale: "/scratch/nsa325/koopmann_model_saves/resmlp.safetensors"
-  scale_location: 1
+  scale_location: 0
   num_scaled_layers: 1
 
 wandb: 
@@ -23,18 +23,19 @@ wandb:
     project: "koopman_interp"
 
 autoencoder:
-  ae_dim: 2_048
+  ae_dim: 2048
   hidden_config: []
-  ae_nonlinearity: "relu"
+  ae_nonlinearity: "leaky_relu"
   batchnorm: False
   lambda_reconstruction: 1
-  lambda_prediction: 1e-3
-  lambda_id: 1e-3
+  lambda_state_pred: 1e-1
+  lambda_latent_pred: 1e-1
+  lambda_isometric: 0
   koopman_param: "lowrank"
-  koopman_rank: 10
+  koopman_rank: 20
 
 task_type: "autoencoder"
-batch_size: 2_048
+batch_size: 16_384
 seed: 21
 save_name: "mnist_model"
 save_dir: "/scratch/nsa325/koopmann_model_saves/"

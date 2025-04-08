@@ -1,7 +1,7 @@
 model: 
     residual: True
     out_features: 10
-    hidden_neurons: [512,512,512,512]
+    hidden_neurons: [784,784,784,784]
 
 optim: 
     type: "sgd"

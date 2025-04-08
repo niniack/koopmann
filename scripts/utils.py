@@ -179,14 +179,14 @@ def separate_param_groups(model, weight_decay):
         if module_name == "":
             continue
 
-        # Skip Koopman modules entirely
-        if "koopman" in module_name.lower():
-            for param_name, param in module.named_parameters(recurse=False):
-                full_name = f"{module_name}.{param_name}"
-                if param.requires_grad and id(param) not in seen_params:
-                    no_decay_params.append(param)
-                    seen_params.add(id(param))
-            continue
+        # # Skip Koopman modules entirely
+        # if "koopman" in module_name.lower():
+        #     for param_name, param in module.named_parameters(recurse=False):
+        #         full_name = f"{module_name}.{param_name}"
+        #         if param.requires_grad and id(param) not in seen_params:
+        #             no_decay_params.append(param)
+        #             seen_params.add(id(param))
+        #     continue
 
         # Skip BatchNorm modules entirely
         if isinstance(module, (torch.nn.BatchNorm1d, torch.nn.BatchNorm2d, torch.nn.BatchNorm3d)):
@@ -211,7 +211,7 @@ def separate_param_groups(model, weight_decay):
     # Check for any parameters we missed (can happen with custom parameter registrations)
     for name, param in model.named_parameters():
         if param.requires_grad and id(param) not in seen_params:
-            if "koopman" in name.lower() or "bias" in name.lower() or "bn" in name.lower():
+            if "bias" in name.lower() or "bn" in name.lower():
                 no_decay_params.append(param)
             else:
                 decay_params.append(param)
@@ -306,3 +306,11 @@ def load_config(config_path_or_obj: Path | str | T | dict, config_model: type[T]
         config_dict = yaml.safe_load(f)
 
     return config_model(**config_dict)
+
+
+class DotDict(dict):
+    """Dictionary subclass that provides attribute access to keys."""
+
+    __getattr__ = dict.get
+    __setattr__ = dict.__setitem__
+    __delattr__ = dict.__delitem__

@@ -1,3 +1,4 @@
+import json
 import math
 import os
 import pdb
@@ -17,6 +18,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 from torcheval.metrics import MulticlassAccuracy
 from torchvision import transforms
+from torchvision.utils import save_image
 
 from analysis.common import load_autoencoder, load_model
 from koopmann.data import (
@@ -35,20 +37,24 @@ USER = os.environ.get("USER")
 # Define attacks and epsilons
 attacks = [
     fb.attacks.FGSM(),
-    # fb.attacks.LinfPGD(),
+    # fb.attacks.L2PGD(),
+    fb.attacks.LinfPGD(),
+    fb.attacks.L2CarliniWagnerAttack(),
     # fb.attacks.LinfBasicIterativeAttack(),
-    # fb.attacks.LinfAdditiveUniformNoiseAttack(s),
     # fb.attacks.LinfDeepFoolAttack(),
 ]
 epsilons = [
     0.0,
-    0.001,
-    0.003,
     0.005,
     0.01,
     0.03,
     0.05,
+    0.06,
+    0.07,
+    0.08,
+    0.09,
     0.1,
+    0.15,
 ]
 ############################
 
@@ -66,6 +72,21 @@ def load_dataset(metadata, data_path):
     return dataset
 
 
+class FrankensteinCouncil(nn.Module):
+    def __init__(self, frankenstein_models, original_model):
+        super().__init__()
+        self.frankenstein_models = frankenstein_models
+        self.original_model = original_model
+
+    def forward(self, x) -> list:
+        res = []
+        res.append(self.original_model(x))
+        for fm in self.frankenstein_models:
+            res.append(fm(x))
+
+        return torch.stack(res)
+
+
 class FrankensteinModel(nn.Module):
     def __init__(self, original_model, autoencoder, scale_idx=0):
         super().__init__()
@@ -80,7 +101,7 @@ class FrankensteinModel(nn.Module):
         self.autoencoder = autoencoder
         self.end_components = nn.Sequential(original_model.components[-1:])
 
-    def forward(self, x):
+    def forward(self, x) -> torch.Tensor:
         x = self.start_components(x)
         x = self.autoencoder(x, k=self.k_steps).predictions[-1]
         x = self.end_components(x)
@@ -128,7 +149,8 @@ def plot_attack_results(attack_summary):
                 ax.plot(epsilons, accuracies, marker="o", label=model_name)
 
             # Set x-axis to logarithmic scale
-            ax.set_xscale("symlog", linthresh=0.001)
+            # ax.set_xscale("symlog", linthresh=0.001)
+            ax.set_xscale("linear")
 
             # Add labels and legend
             ax.set_xticks([eps for eps in epsilons])
@@ -165,28 +187,33 @@ def adv_attack(
     fb_preprocessing = dict(mean=[images.mean()], std=[images.std()], axis=-1)
 
     # Prepare models
+    frankenstein_models_list = []
     models = {
         "original": fb.PyTorchModel(model, bounds=(0, 1), preprocessing=fb_preprocessing),
     }
     model.eval()
     for ae_name, ae in zip(ae_names, autoencoders):
-        if "vanilla" in ae_name:
-            name = f"autoencoder_dim{ae.latent_features}_rank{ae.rank}_vanilla"
-        else:
-            name = f"autoencoder_dim{ae.latent_features}_rank{ae.rank}_denoised"
-        models[name] = fb.PyTorchModel(
+        name = f"ae_dim{ae.latent_features}_rank{ae.rank}"
+
+        fb_frankenstein_model = fb.PyTorchModel(
             FrankensteinModel(model, ae).eval(), bounds=(0, 1), preprocessing=fb_preprocessing
         )
+        frankenstein_models_list.append(fb_frankenstein_model)
+        models[name] = fb_frankenstein_model
+
+    council = FrankensteinCouncil(frankenstein_models_list, model)
+    models.update({"error_corrected": council})
 
     # Define testing scenarios
     scenarios = [
         "original",
-        # "autoencoder_dim2048_rank10_denoised",
-        "autoencoder_dim2048_rank20_denoised",
-        "autoencoder_dim2048_rank10_vanilla",
-        "autoencoder_dim2048_rank20_vanilla",
-        "autoencoder_dim2048_rank50_vanilla",
-        "autoencoder_dim2048_rank200_vanilla",
+        # "ae_dim256_rank20",
+        # "ae_dim512_rank10",
+        # "ae_dim512_rank20",
+        # "ae_dim1024_rank10",
+        "ae_dim1024_rank20",
+        # "ae_dim2048_rank10",
+        "ae_dim2048_rank20",
     ]
     attack_summary = NestedDefaultDict()
 
@@ -205,11 +232,15 @@ def adv_attack(
                     # Accuracy of attacked
                     if model_name == scenario:
                         acc = ((len(images) - success[i].sum()) / len(images)).item()
-
                     # Accuracy of others
                     else:
                         metric = MulticlassAccuracy()
-                        output = eval_model(adv_tensor)
+                        if isinstance(eval_model, FrankensteinCouncil):
+                            output_list = eval_model(adv_tensor)  # [models, batch, features]
+                            max_output_list = torch.argmax(output_list, dim=2)  # [models, batch]
+                            output, _ = torch.mode(max_output_list, dim=0)  # [batch]
+                        else:
+                            output = eval_model(adv_tensor)  # [batch, features]
                         metric.update(output, labels.squeeze())
                         acc = metric.compute().item()
 
@@ -292,12 +323,13 @@ def main(data_path, mlp_path, ae_path):
 
     # Load autoencoder
     ae_names = [
-        f"dim_{2048}_k_{1}_loc_{0}_lowrank_{10}_autoencoder_mnist_model_vanilla",
-        f"dim_{2048}_k_{1}_loc_{0}_lowrank_{20}_autoencoder_mnist_model_vanilla",
-        f"dim_{2048}_k_{1}_loc_{0}_lowrank_{50}_autoencoder_mnist_model_vanilla",
-        f"dim_{2048}_k_{1}_loc_{0}_lowrank_{200}_autoencoder_mnist_model_vanilla",
+        # f"dim_{256}_k_{1}_loc_{0}_lowrank_{20}_autoencoder_mnist_model",
+        # f"dim_{512}_k_{1}_loc_{0}_lowrank_{10}_autoencoder_mnist_model",
+        # f"dim_{512}_k_{1}_loc_{0}_lowrank_{20}_autoencoder_mnist_model",
+        # f"dim_{1024}_k_{1}_loc_{0}_lowrank_{10}_autoencoder_mnist_model",
+        f"dim_{1024}_k_{1}_loc_{0}_lowrank_{20}_autoencoder_mnist_model_adv",
         # f"dim_{2048}_k_{1}_loc_{0}_lowrank_{10}_autoencoder_mnist_model",
-        f"dim_{2048}_k_{1}_loc_{0}_lowrank_{20}_autoencoder_mnist_model",
+        f"dim_{2048}_k_{1}_loc_{0}_lowrank_{20}_autoencoder_mnist_model_adv",
     ]
     autoencoders = [load_autoencoder(ae_path, name)[0].to(device) for name in ae_names]
 
@@ -312,8 +344,13 @@ def main(data_path, mlp_path, ae_path):
 
     # Attack
     results = adv_attack(dataset, model, ae_names, autoencoders, device)
+
+    # Writing to JSON file
+    with open("../output/results_adv.json", "w+") as json_file:
+        json.dump(results, json_file, indent=4)
+
     logger.info("Plotting.")
-    plot_attack_results(results)
+    # plot_attack_results(results)
 
 
 if __name__ == "__main__":

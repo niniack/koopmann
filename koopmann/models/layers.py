@@ -1,6 +1,7 @@
 # layers.py
 __all__ = ["Layer", "LinearLayer", "Conv2DLayer"]
 
+import math
 from abc import ABC
 from typing import Optional, Tuple, Union
 
@@ -87,6 +88,76 @@ class LinearLayer(Layer):
         # Nonlinearity (optional)
         if nonlinearity is not None:
             self.components["nonlinearity"] = self.nonlinearity_module()
+
+    def forward(self, x):
+        # Flatten
+        if len(x.shape) > 2:
+            x = x.flatten(start_dim=1)
+
+        for component in self.components.values():
+            x = component(x)
+
+        return x
+
+
+class LoRALinearLayer(Layer):
+    """
+    Linear layer with low-rank decomposition, built-in batchnorm and nonlinearity.
+    """
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        rank: int,
+        bias: bool = True,
+        batchnorm: bool = False,
+        nonlinearity: Optional[str] = "relu",
+    ):
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            bias=bias,
+            batchnorm=batchnorm,
+            nonlinearity=nonlinearity,
+        )
+
+        self.rank = rank
+
+        # First projection: in_channels -> rank
+        self.components["lora_down"] = nn.Linear(
+            in_features=in_channels,
+            out_features=rank,
+            bias=False,
+        )
+
+        # Second projection: rank -> out_channels
+        self.components["lora_up"] = nn.Linear(
+            in_features=rank,
+            out_features=out_channels,
+            bias=bias,
+        )
+
+        # Batchnorm (optional)
+        if batchnorm:
+            self.components["batchnorm"] = nn.BatchNorm1d(out_channels)
+
+        # Nonlinearity (optional)
+        if nonlinearity is not None:
+            self.components["nonlinearity"] = self.nonlinearity_module()
+
+        # Apply weight initialization
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        # Initialize down projection with small random values
+        nn.init.kaiming_uniform_(self.components["lora_down"].weight, a=math.sqrt(5))
+        # Initialize up projection with zeros for stable training start
+        nn.init.kaiming_uniform_(self.components["lora_up"].weight, a=math.sqrt(5))
+        # Initialize bias if present
+        if self.components["lora_up"].bias is not None:
+            bound = 1 / math.sqrt(self.rank)
+            nn.init.uniform_(self.components["lora_up"].bias, -bound, bound)
 
     def forward(self, x):
         # Flatten

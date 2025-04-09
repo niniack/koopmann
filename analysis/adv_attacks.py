@@ -38,8 +38,8 @@ USER = os.environ.get("USER")
 attacks = [
     fb.attacks.FGSM(),
     # fb.attacks.L2PGD(),
-    fb.attacks.LinfPGD(),
-    fb.attacks.L2CarliniWagnerAttack(),
+    fb.attacks.LinfPGD(steps=50),
+    # fb.attacks.L2CarliniWagnerAttack(),
     # fb.attacks.LinfBasicIterativeAttack(),
     # fb.attacks.LinfDeepFoolAttack(),
 ]
@@ -171,7 +171,7 @@ def plot_attack_results(attack_summary):
 
         plt.tight_layout()
         # Save figure with unique name based on attack
-        fig.savefig(f"../output/{attack_name}_results.png", dpi=300, bbox_inches="tight")
+        fig.savefig(f"../adv_output/{attack_name}_results.png", dpi=300, bbox_inches="tight")
 
 
 def adv_attack(
@@ -346,11 +346,11 @@ def main(data_path, mlp_path, ae_path):
     results = adv_attack(dataset, model, ae_names, autoencoders, device)
 
     # Writing to JSON file
-    with open("../output/results_adv.json", "w+") as json_file:
+    with open("../adv_output/results.json", "w+") as json_file:
         json.dump(results, json_file, indent=4)
 
     logger.info("Plotting.")
-    # plot_attack_results(results)
+    plot_attack_results(results)
 
 
 if __name__ == "__main__":

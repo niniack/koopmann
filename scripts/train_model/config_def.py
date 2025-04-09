@@ -34,3 +34,4 @@ class Config(BaseModel):
     task_type: str
     save_name: Optional[str] = None
     save_dir: Optional[str] = None
+    adversarial_training: bool

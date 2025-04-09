@@ -223,6 +223,7 @@ class LotusRootDataset(Dataset):
         self.rng = np.random.RandomState(config.seed)
         self.features = []
         self.labels = []
+        self.num_classes = 2
 
         for _ in range(config.num_samples):
             x, y, label = self.sample_point()
@@ -377,6 +378,7 @@ class MNISTDataset(datasets.MNIST):
         self.labels = self.targets
         self.mean = 0.1307
         self.std = 0.3081
+        self.num_classes = 10
 
     def name(self):
         return "MNISTDataset"

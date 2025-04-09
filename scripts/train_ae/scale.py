@@ -38,9 +38,6 @@ from scripts.utils import DotDict, get_dataloaders, get_optimizer, setup_config
 
 ############## UTILS ###################
 
-# NOTE: for now
-USE_ADV_TRAINING = False
-
 
 def get_model(config, device):
     """Load model based on configuration."""
@@ -134,32 +131,6 @@ def extract_activations(
     return acts_dict
 
 
-def setup_adversarial_attack(model, autoencoder, train_loader, device, config, optimizer):
-    inputs, labels = next(iter(train_loader))
-    min_pixel, max_pixel = inputs.min(), inputs.max()
-
-    frankenstein_ae = (
-        FrankensteinKoopmanAutoencoder(
-            koopman_autoencoder=deepcopy(autoencoder),
-            original_model=deepcopy(model),
-            scale_idx=config.scale.scale_location,
-        )
-        .to(device)
-        .eval()
-    )
-    art_classifier = PyTorchClassifier(
-        model=frankenstein_ae,
-        clip_values=(min_pixel, max_pixel),
-        loss=nn.CrossEntropyLoss(),
-        optimizer=optimizer,
-        input_shape=784,
-        nb_classes=10,
-    )
-    adv_epsilon = 0.1
-    adv_attack = FastGradientMethod(estimator=art_classifier, eps=adv_epsilon)
-    return adv_attack
-
-
 ############ METRICS ##################
 class AutoencoderMetrics:
     def __init__(self):
@@ -192,37 +163,38 @@ class AutoencoderMetrics:
 
     def update(
         self,
-        model=None,
-        input=None,
-        label=None,
-        autoencoder=None,
-        config=None,
+        model,
+        input,
+        label,
+        autoencoder,
+        config,
         is_probed=None,
         only_first_last=True,
     ) -> OrderedDict:
-        # If arguments are provided, compute losses
-        if all(arg is not None for arg in [model, input, label, autoencoder, config]):
-            # Forward pass
-            _ = model(input)
+        # Forward pass
+        _ = model(input)
 
-            # Get activations
-            act_dict = extract_activations(model, input, config, is_probed, only_first_last)
-            k_steps = config.scale.num_scaled_layers
+        # Get activations
+        act_dict = extract_activations(model, input, config, is_probed, only_first_last)
 
-            for name, method in self.metric_to_method_dict.items():
-                raw, fvu = method(
-                    act_dict=act_dict,
-                    autoencoder=autoencoder,
-                    k=k_steps,
-                    probed=is_probed,
-                )
+        # Get number of steps
+        k_steps = config.scale.num_scaled_layers
 
-                self.batch_metrics[f"raw_{name}"] = raw
-                self.batch_metrics[f"fvu_{name}"] = fvu
-
-            self.batch_metrics["shaping_loss"] = compute_eigenvector_shaping_loss(
-                act_dict, autoencoder, label
+        # Compute each loss
+        for name, method in self.metric_to_method_dict.items():
+            raw, fvu = method(
+                act_dict=act_dict,
+                autoencoder=autoencoder,
+                k=k_steps,
+                probed=is_probed,
             )
+
+            self.batch_metrics[f"raw_{name}"] = raw
+            self.batch_metrics[f"fvu_{name}"] = fvu
+
+        self.batch_metrics["shaping_loss"] = compute_eigenvector_shaping_loss(
+            act_dict, autoencoder, label
+        )
 
         # Update totals
         self.num_batches += 1
@@ -238,7 +210,7 @@ class AutoencoderMetrics:
         log_dict = {}
         log_dict["epoch"] = epoch
         for key, value in self.total_metrics.items():
-            log_dict[f"{prefix}/{key}"] = value
+            log_dict[f"{prefix}/{key}"] = value / self.num_batches
 
         wandb.log(log_dict, step=epoch)
 
@@ -272,16 +244,11 @@ def eval_log_autoencoder(model, autoencoder, test_loader, device, config, is_pro
             input, label = input.to(device), label.to(device).squeeze()
             metrics.update(model, input, label, autoencoder, config, is_probed)
 
-    # Calculate averages
-    avg_metrics = metrics.compute()
+    # Log metrics
     metrics.log_metrics(epoch, "eval")
 
-    return avg_metrics
 
-
-def train_one_epoch(
-    model, autoencoder, train_loader, device, config, is_probed, epoch, optimizer, adv_attack
-):
+def train_one_epoch(model, autoencoder, train_loader, device, config, is_probed, epoch, optimizer):
     """Train autoencoder for one epoch."""
 
     # Initialize metrics tracker
@@ -298,14 +265,6 @@ def train_one_epoch(
         inputs_ = inputs.clone()
         inputs, labels = inputs.to(device), labels.to(device).squeeze()
         optimizer.zero_grad()
-
-        # Generate adversarial examples
-        if USE_ADV_TRAINING:
-            adv_inputs = adv_attack.generate(x=inputs_.numpy())
-            adv_inputs = torch.tensor(adv_inputs, device=device)
-            num_to_replace = int(0.5 * batch_size)
-            rand_idx = torch.randperm(batch_size)[:num_to_replace]
-            inputs[rand_idx] = adv_inputs[rand_idx]
 
         # Compute losses
         act_dict = metrics.update(
@@ -328,17 +287,17 @@ def train_one_epoch(
             # + lambda_shaping_loss * metrics.batch_metrics.shaping_loss
         )
 
-        # NOTE: adhoc implementation of nuclear norm
-        nuc_norm = torch.tensor(0.0).to(device)
-        for name, module in autoencoder.named_modules():
-            if isinstance(module, torch.nn.Linear):
-                if "decoder" in name or "encoder" in name:
-                    weight = module.weight
-                    nuc_norm += torch.linalg.norm(weight, ord="nuc")
-            elif "koopman" in name and isinstance(module, Layer):
-                weight = (module.components.lora_up.weight @ module.components.lora_down.weight).T
-                nuc_norm += torch.linalg.norm(weight, ord="nuc")
-        loss += 1e-4 * nuc_norm
+        # # NOTE: adhoc implementation of nuclear norm
+        # nuc_norm = torch.tensor(0.0).to(device)
+        # for name, module in autoencoder.named_modules():
+        #     if isinstance(module, torch.nn.Linear):
+        #         if "decoder" in name or "encoder" in name:
+        #             weight = module.weight
+        #             nuc_norm += torch.linalg.norm(weight, ord="nuc")
+        #     elif "koopman" in name and isinstance(module, Layer):
+        #         weight = (module.components.lora_up.weight @ module.components.lora_down.weight).T
+        #         nuc_norm += torch.linalg.norm(weight, ord="nuc")
+        # loss += 1e-4 * nuc_norm
 
         # Track combined loss
         metrics.set_combined_loss(loss)
@@ -373,7 +332,7 @@ def save_autoencoder(autoencoder, config, flavor):
         f"autoencoder_{config.save_name}.safetensors"
     )
     ae_path = Path(config.save_dir, filename)
-    autoencoder.save_model(ae_path)
+    autoencoder.save_model(ae_path, suffix=None)
 
     return ae_path
 
@@ -398,17 +357,10 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]] = None):
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, config.optim.num_epochs)
 
-    # Set up adversarial training
-    adv_attack = (
-        setup_adversarial_attack(model, autoencoder, train_loader, device, config, optimizer)
-        if USE_ADV_TRAINING
-        else None
-    )
-
     # Training loop
     for epoch in range(config.optim.num_epochs):
         # Train step
-        losses = train_one_epoch(
+        train_losses = train_one_epoch(
             model=model,
             autoencoder=autoencoder,
             train_loader=train_loader,
@@ -417,7 +369,6 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]] = None):
             is_probed=is_probed,
             epoch=epoch,
             optimizer=optimizer,
-            adv_attack=adv_attack,
         )
 
         scheduler.step()
@@ -436,7 +387,7 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]] = None):
 
             logger.info(
                 f"Epoch {epoch + 1}/{config.optim.num_epochs}, "
-                f"Train Loss: {losses['combined_loss']:.4f}"
+                f"Train Loss: {train_losses['combined_loss']:.4f}, "
             )
 
     # Save model

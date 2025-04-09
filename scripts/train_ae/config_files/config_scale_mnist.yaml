@@ -7,13 +7,13 @@ train_data:
   negative_label: false
 
 optim:
-  num_epochs: 500
+  num_epochs: 100
   learning_rate: 1e-3
   weight_decay: 1e-4
   type: "adamw"
 
 scale:
-  model_to_scale: "/scratch/nsa325/koopmann_model_saves/resmlp.safetensors"
+  model_to_scale: "/scratch/nsa325/koopmann_model_saves/resmlp_mnist.safetensors"
   scale_location: 0
   num_scaled_layers: 1
 

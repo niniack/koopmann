@@ -10,6 +10,7 @@ from torch import nn
 from torch.nn import Module
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
+from torchvision import datasets, transforms
 
 import wandb
 from koopmann.log import logger
@@ -17,11 +18,17 @@ from koopmann.models import MLP, ConvResNet, ResMLP
 from koopmann.utils import compute_model_accuracy, get_device
 from scripts.utils import (
     compute_neural_collapse_metrics,
+    denorm,
+    fgsm_attack,
     get_dataloaders,
     get_optimizer,
     separate_param_groups,
     setup_config,
 )
+
+# NOTE: for now
+ADV_EPSILON = 0.08
+ADV_FRACTION = 0.5
 
 
 def get_model(config, dataset_features):
@@ -80,17 +87,50 @@ def train_one_epoch(
     criterion: Module,
     optimizer: Optimizer,
     epoch: int,
+    use_adversarial_training: bool,
 ) -> float:
     model.to(device).train()
     loss_epoch = 0.0
 
-    for batch_idx, (input, label) in enumerate(train_loader):
+    for _, (input, label) in enumerate(train_loader):
+        # Unwrap input, label
         input, label = (
             input.to(device, non_blocking=True),
             label.to(device, non_blocking=True).squeeze(),
         )
-        optimizer.zero_grad(set_to_none=True)
-        output = model(input)
+        batch_size = input.size(0)
+        input_clean = input.clone()
+
+        if use_adversarial_training:
+            # Set gradients for input
+            input.requires_grad_()
+
+            # Forward and backward pass
+            output = model(input)
+            loss = criterion(output, label.long())
+            loss.backward()
+
+            # Get gradients for input
+            input_grad = input.grad.data
+
+            # Denormalize
+            input_denorm = denorm(input, device, mean=[0.1307], std=[0.3081])
+
+            # Attack
+            adv_input = fgsm_attack(input_denorm, ADV_EPSILON, input_grad)
+
+            # Renormalize
+            adv_input_normalized = transforms.Normalize((0.1307,), (0.3081,))(adv_input)
+
+            # Replace random samples
+            num_to_replace = int(ADV_FRACTION * batch_size)
+            rand_idx = torch.randperm(batch_size)[:num_to_replace]
+            input_clean[rand_idx] = adv_input_normalized[rand_idx]
+
+        # Forward pass
+        output = model(input_clean)
+
+        optimizer.zero_grad()
         loss = criterion(output, label.long())
         loss.backward()
         optimizer.step()
@@ -130,6 +170,7 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]] = None):
             criterion=loss,
             optimizer=optimizer,
             epoch=epoch,
+            use_adversarial_training=config.adversarial_training,
         )
 
         # Log metrics
@@ -167,7 +208,8 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]] = None):
     if config.save_dir:
         os.makedirs(os.path.dirname(config.save_dir), exist_ok=True)
         model_path = Path(config.save_dir)
-        model.save_model(model_path, dataset=test_dataset.name())
+        suffix = "adv" if config.adversarial_training else None
+        model.save_model(model_path, suffix=suffix, dataset=test_dataset.name())
 
 
 if __name__ == "__main__":

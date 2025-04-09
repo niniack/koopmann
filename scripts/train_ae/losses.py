@@ -23,27 +23,38 @@ def _padding_recons_loss(act_dict, autoencoder) -> tuple:
     padded_acts, masks = prepare_padded_acts_and_masks(act_dict, autoencoder)
 
     # Stack along layers dimension
-    padded_acts = torch.stack(padded_acts, dim=1)  # shape: [batch, layers, neurons]
-    masks = torch.stack(masks, dim=0).unsqueeze(dim=0)  # shape: [1, layers, neurons]
+    # shape: [batch, layers, neurons]
+    padded_acts = torch.stack(padded_acts, dim=1)
 
-    # Reconstruct each layer’s padded activation (k=0 => no Koopman stepping)
+    # shape: [1, layers, neurons]
+    masks = torch.stack(masks, dim=0).unsqueeze(dim=0)
+
+    # Reconstruct each layer’s padded activation
+    # k=0 means no Koopman stepping
     recons_acts = [
         autoencoder(padded_act, k=0).reconstruction for padded_act in padded_acts.unbind(dim=1)
     ]
 
-    # Same shape as padded_acts, shape: [batch, layers, neurons]
+    # Stack reconstructed acts
+    # shape: [batch, layers, neurons]
     recons_acts = torch.stack(recons_acts, dim=1)
 
-    # MSE in state space, ignoring masked-out neurons
+    # Difference in state space, ignoring masked-out neurons
+    # shape: [batch, layers, neurons]
     masked_diff = (padded_acts - recons_acts) * masks
-    recons_error = masked_diff.pow(2).mean(dim=[0, 2])  # [layers]
+
+    # MSE across batch and neuron dimensions
+    # shape: [layers]
+    recons_error = masked_diff.pow(2).mean(dim=[0, 2])
 
     # Total variance in state space
+    # shape: [batch, layers, neurons]
     masked_centered_acts = (padded_acts - padded_acts.mean(dim=[0], keepdim=True)) * masks
-    total_variance_state_space = masked_centered_acts.pow(2).mean(dim=[0, 2])  # [layers]
 
-    # Return ratio = (MSE) / (variance)
-    return recons_error.sum(), (recons_error / total_variance_state_space).mean()
+    # shape: [layers]
+    total_variance_state_space = masked_centered_acts.pow(2).mean(dim=[0, 2])
+
+    return recons_error.mean(), (recons_error / total_variance_state_space).mean()
 
 
 def _probing_recons_loss(act_dict, autoencoder) -> tuple:
@@ -89,7 +100,9 @@ def _latent_prediction_loss(act_dict, autoencoder, k) -> tuple:
 
     # Encode each layer’s padded activation into latent space
     latent_acts = [autoencoder.encode(padded_act) for padded_act in padded_acts]
-    latent_acts = torch.stack(latent_acts, dim=1)  # shape: [batch, layers, latent]
+
+    # shape: [batch, layers, latent]
+    latent_acts = torch.stack(latent_acts, dim=1)
 
     # NOTE: Is this right? I think we should be detaching these to prevent a complicated
     # computational graph.
@@ -97,20 +110,21 @@ def _latent_prediction_loss(act_dict, autoencoder, k) -> tuple:
 
     # Koopman step: multiply the *first* layer’s latent by K^k
     K_matrix = autoencoder.koopman_weights.T
+
+    # shape: [batch, neurons]
     embedded_act = latent_acts[:, 0, :] @ linalg.matrix_power(K_matrix, autoencoder.k_steps)
 
-    # Compare predicted embedding with the *last-layer* embedding
-    # Square the difference, average across batch
-    latent_error = (embedded_act - latent_acts[:, -1, :]).pow(2).mean(dim=[0, 1])  # shape: [1]
+    # Square the difference, average across all dimensions
+    # shape: [1]
+    latent_error = (embedded_act - latent_acts[:, -1, :]).pow(2).mean(dim=[0, 1])
 
     # Total variance in final layer’s latent
     latent_last_centered_acts = latent_acts[:, -1, :] - latent_acts[:, -1, :].mean(dim=0)
+
     # shape: [1]
     total_variance_latent_space = latent_last_centered_acts.pow(2).mean(dim=[0, 1])
 
-    fvu = latent_error / total_variance_latent_space
-
-    return latent_error, fvu
+    return latent_error, latent_error / total_variance_latent_space
 
 
 ########################## K-Step Prediction Loss (State Space) ##########################
@@ -125,22 +139,26 @@ def compute_k_prediction_loss(act_dict, autoencoder, k, probed) -> tuple:
 def _k_prediction_loss(act_dict, autoencoder, k) -> tuple:
     padded_acts, _ = prepare_padded_acts_and_masks(act_dict, autoencoder)
 
-    starting_acts = padded_acts[0]  # shape: [batch, neurons]
-    target_acts = padded_acts[-1]  # shape: [batch, neurons]
+    # shape: [batch, neurons]
+    starting_acts = padded_acts[0]
+    target_acts = padded_acts[-1]
 
-    # Get autoencoder predictions: shape [layers, batch, neurons]
+    # Get autoencoder predictions
+    # shape [layers, batch, neurons]
     all_preds = autoencoder(x=starting_acts, k=k).predictions
 
     # The final prediction is stored at all_preds[-1].
     pred_k = all_preds[-1, :, : target_acts.size(-1)]
-    state_space_pred_error = (pred_k - target_acts).pow(2).mean(dim=[0, 1])  # shape: [1]
+
+    # Square the difference and average across all dimensions
+    # shape: [1]
+    state_space_pred_error = (pred_k - target_acts).pow(2).mean(dim=[0, 1])
 
     # Total variance
-    total_variance = (target_acts - target_acts.mean(dim=0)).pow(2).mean(dim=[0, 1])  # shape: [1]
+    # shape: [1]
+    total_variance = (target_acts - target_acts.mean(dim=0)).pow(2).mean(dim=[0, 1])
 
-    fvu = state_space_pred_error / total_variance
-
-    return state_space_pred_error, fvu
+    return state_space_pred_error, state_space_pred_error / total_variance
 
 
 ########################## Isometric Loss ##########################

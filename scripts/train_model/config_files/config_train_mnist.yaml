@@ -1,9 +1,9 @@
 model: 
-    residual: False
+    residual: True
     out_features: 10
     hidden_neurons: [784,784,784,784]
     bias: True
-    batchnorm: False
+    batchnorm: True
 
 optim: 
     type: "sgd"
@@ -30,3 +30,4 @@ print_freq: 5
 task_type: "classifier"
 save_name: "mnist_model"
 save_dir: "/scratch/nsa325/koopmann_model_saves/"
+adversarial_training: False

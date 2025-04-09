@@ -54,13 +54,18 @@ class Serializable(ABC):
             meta_data_dict[k] = v
         return meta_data_dict
 
-    def save_model(self, file_path: Union[str, Path], **metadata) -> None:
+    def save_model(self, file_path: Union[str, Path], suffix, **metadata) -> None:
         """Save model to file with metadata."""
         path = Path(file_path)
 
         # Determine if it's a directory or if it's missing an extension
         if path.is_dir() or not path.suffix:
             model_name = self.__class__.__name__.lower()
+
+            # Apply suffix if provided
+            if suffix:
+                model_name = f"{model_name}_{suffix}"
+
             filename = f"{model_name}.safetensors"
 
             # If path is a file without extension, use it as a prefix
@@ -98,7 +103,7 @@ class Serializable(ABC):
         # Save using safetensors
         st.save_model(self, final_path, metadata=string_metadata)
 
-        return final_path  # Return the actual path used, so the user knows where it was saved
+        return final_path
 
     @classmethod
     def load_model(cls, file_path: Union[str, Path], **kwargs) -> Tuple[nn.Module, Dict[str, Any]]:

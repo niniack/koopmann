@@ -312,15 +312,16 @@ class LowRankKoopmanAutoencoder(KoopmanAutoencoder):
             @ self.components.koopman_matrix.components.lora_down.weight
         )
 
-    def forward(self, x, k):
-        # Update lora_up weight to be transpose of lora_down before computation
-        with torch.no_grad():
-            self.components.koopman_matrix.components.lora_up.weight.copy_(
-                self.components.koopman_matrix.components.lora_down.weight.t()
-            )
+    # NOTE: this makes it symmetric
+    # def forward(self, x, k):
+    #     # Update lora_up weight to be transpose of lora_down before computation
+    #     with torch.no_grad():
+    #         self.components.koopman_matrix.components.lora_up.weight.copy_(
+    #             self.components.koopman_matrix.components.lora_down.weight.t()
+    #         )
 
-        # Proceed with the normal forward pass
-        return super().forward(x)
+    #     # Proceed with the normal forward pass
+    #     return super().forward(x)
 
     def _get_basic_metadata(self) -> dict[str, Any]:
         """Get model-specific metadata for serialization."""
@@ -350,6 +351,7 @@ class ExponentialKoopmanAutencoder(KoopmanAutoencoder):
         batchnorm: bool = False,
         nonlinearity: str = "leaky_relu",
         use_eigeninit: Optional[bool] = False,
+        **kwargs,
     ):
         super().__init__(
             k_steps,

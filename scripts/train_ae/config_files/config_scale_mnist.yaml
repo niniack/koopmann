@@ -4,38 +4,44 @@ train_data:
   split: "train"
   torch_transform: null
   seed: 42
-  negative_label: false
+  negative_label: False
 
 optim:
-  num_epochs: 100
+  num_epochs: 500
   learning_rate: 1e-3
-  weight_decay: 1e-4
+  weight_decay: 5e-4
   type: "adamw"
 
 scale:
   model_to_scale: "/scratch/nsa325/koopmann_model_saves/resmlp_mnist.safetensors"
-  scale_location: 0
+  scale_location: 1
   num_scaled_layers: 1
 
 wandb: 
-    use_wandb: true
+    use_wandb: True
     entity: "nishantaswani"
     project: "koopman_interp"
 
 autoencoder:
-  ae_dim: 2048
+  preprocess: True
+  pca_dim: 784
+  ae_dim: 1_024
   hidden_config: []
   ae_nonlinearity: "leaky_relu"
   batchnorm: False
-  lambda_reconstruction: 1
+  lambda_reconstruction: 1e0
   lambda_state_pred: 1e-1
   lambda_latent_pred: 1e-1
-  lambda_isometric: 0
+  lambda_isometric: 1e-1
   koopman_param: "lowrank"
-  koopman_rank: 20
+  koopman_rank: 50
+
+adv: 
+    use_adversarial_training: False
+    epsilon: 0.08
 
 task_type: "autoencoder"
-batch_size: 16_384
+batch_size: 1_024
 seed: 21
 save_name: "mnist_model"
 save_dir: "/scratch/nsa325/koopmann_model_saves/"

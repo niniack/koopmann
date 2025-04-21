@@ -1,24 +1,16 @@
 import json
 import math
 import os
-import pdb
-from ast import literal_eval
 from collections import defaultdict
-from copy import copy
-from pathlib import Path
 
 import click
 import foolbox as fb
 import matplotlib.pyplot as plt
-import numpy as np
 import torch
-from rich import print as rprint
-from rich.pretty import pprint
 from torch import nn
-from torch.utils.data import DataLoader
+from torch.utils.data import Dataset
 from torcheval.metrics import MulticlassAccuracy
 from torchvision import transforms
-from torchvision.utils import save_image
 
 from analysis.common import load_autoencoder, load_model
 from koopmann.data import (
@@ -26,13 +18,11 @@ from koopmann.data import (
     get_dataset_class,
 )
 from koopmann.log import logger
-from koopmann.mixins.serializable import Serializable
 from koopmann.models import BaseTorchModel
 from koopmann.utils import get_device
 
 ############################
 USER = os.environ.get("USER")
-
 
 # Define attacks and epsilons
 attacks = [
@@ -128,8 +118,27 @@ def plot_attack_results(attack_summary):
         n_rows = math.ceil(n_scenarios / n_cols)
 
         # Create a figure with subplots (with appropriate layout)
-        fig, axs = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 4 * n_rows), squeeze=False)
+        fig, axs = plt.subplots(
+            n_rows, n_cols, figsize=(5 * n_cols, 4 * n_rows), squeeze=False, sharey=True
+        )
         fig.suptitle(f"{attack_name}", fontsize=16)
+
+        # Find global y-axis limits across all scenarios
+        global_y_min = float("inf")
+        global_y_max = float("-inf")
+
+        # First pass to determine global y-axis limits
+        for scenario in scenarios:
+            for model_name in attack_summary[attack_name][scenario]:
+                data = attack_summary[attack_name][scenario][model_name]
+                accuracies = [data[eps] for eps in sorted(data.keys())]
+                global_y_min = min(global_y_min, min(accuracies))
+                global_y_max = max(global_y_max, max(accuracies))
+
+        # Add a small buffer to the y-axis limits
+        y_buffer = (global_y_max - global_y_min) * 0.05
+        global_y_min = max(0, global_y_min - y_buffer)
+        global_y_max = min(100, global_y_max + y_buffer)
 
         # For each scenario
         for i, scenario in enumerate(scenarios):
@@ -152,12 +161,18 @@ def plot_attack_results(attack_summary):
             # ax.set_xscale("symlog", linthresh=0.001)
             ax.set_xscale("linear")
 
+            # Set y-axis limits consistently across all subplots
+            ax.set_ylim(global_y_min, global_y_max)
+
             # Add labels and legend
             ax.set_xticks([eps for eps in epsilons])
             ax.set_xticklabels([str(eps) for eps in epsilons], rotation=60)
-            ax.set_xticklabels([str(eps) for eps in epsilons])
             ax.set_xlabel("Epsilon")
-            ax.set_ylabel("Accuracy (%)")
+
+            # Only add y-label to plots in the first column
+            if col_idx == 0:
+                ax.set_ylabel("Accuracy (%)")
+
             ax.set_title(f"Model attacked: {scenario}")
             if i == 0:
                 ax.legend()
@@ -175,9 +190,10 @@ def plot_attack_results(attack_summary):
 
 
 def adv_attack(
-    dataset,
-    model: BaseTorchModel,
+    dataset: Dataset,
+    model_names: list[str],
     ae_names: list[str],
+    models: list[BaseTorchModel],
     autoencoders: list[BaseTorchModel],
     device: str,
 ):
@@ -186,34 +202,47 @@ def adv_attack(
     images, labels = normalize_transform(dataset.data).to(device), dataset.labels.to(device)
     fb_preprocessing = dict(mean=[images.mean()], std=[images.std()], axis=-1)
 
+    # Container for all models
+    all_models_dict = {}
+
     # Prepare models
+    for model_name, model in zip(model_names, models):
+        all_models_dict[model_name] = fb.PyTorchModel(
+            model.eval(), bounds=(0, 1), preprocessing=fb_preprocessing
+        )
+
+    # Prepare autoencoders
     frankenstein_models_list = []
-    models = {
-        "original": fb.PyTorchModel(model, bounds=(0, 1), preprocessing=fb_preprocessing),
-    }
-    model.eval()
     for ae_name, ae in zip(ae_names, autoencoders):
-        name = f"ae_dim{ae.latent_features}_rank{ae.rank}"
+        new_ae_name = f"ae_dim{ae.latent_features}_rank{ae.rank}"
 
         fb_frankenstein_model = fb.PyTorchModel(
             FrankensteinModel(model, ae).eval(), bounds=(0, 1), preprocessing=fb_preprocessing
         )
         frankenstein_models_list.append(fb_frankenstein_model)
-        models[name] = fb_frankenstein_model
+        all_models_dict[new_ae_name] = fb_frankenstein_model
 
-    council = FrankensteinCouncil(frankenstein_models_list, model)
-    models.update({"error_corrected": council})
+    # # Prepare error correcting
+    # council = FrankensteinCouncil(frankenstein_models_list, model)
+    # all_models_dict.update({"error_corrected": council})
 
     # Define testing scenarios
     scenarios = [
-        "original",
+        "mlp_mnist_shallowaf_adv",
+        "mlp_mnist_shallow_adv",
+        "mlp_mnist_deep_adv",
+        "mlp_mnist_deepaf_adv",
+        "resmlp_mnist_shallowaf_adv",
+        "resmlp_mnist_shallow_adv",
+        "resmlp_mnist_deep_adv",
+        "resmlp_mnist_deepaf_adv",
         # "ae_dim256_rank20",
         # "ae_dim512_rank10",
         # "ae_dim512_rank20",
         # "ae_dim1024_rank10",
-        "ae_dim1024_rank20",
+        # "ae_dim1024_rank20",
         # "ae_dim2048_rank10",
-        "ae_dim2048_rank20",
+        # "ae_dim2048_rank20",
     ]
     attack_summary = NestedDefaultDict()
 
@@ -223,12 +252,12 @@ def adv_attack(
         for scenario in scenarios:
             # Run the attack
             _, clipped_advs_per_epsilon, success = attack(
-                models[scenario], images, labels, epsilons=epsilons
+                all_models_dict[scenario], images, labels, epsilons=epsilons
             )
             assert success.shape == (len(epsilons), len(images))
 
             for i, adv_tensor in enumerate(clipped_advs_per_epsilon):
-                for model_name, eval_model in models.items():
+                for model_name, eval_model in all_models_dict.items():
                     # Accuracy of attacked
                     if model_name == scenario:
                         acc = ((len(images) - success[i].sum()) / len(images)).item()
@@ -249,46 +278,6 @@ def adv_attack(
             logger.info(f"Scenario {scenario} done.")
 
     return attack_summary
-
-
-def analyze_lipschitz_constants(model, n_samples=1000):
-    # Generate random samples and small perturbations
-    samples = torch.randn(n_samples, model.in_features).to(get_device())
-    delta = 1e-4
-    perturbed = samples + delta * torch.randn_like(samples)
-
-    # Compute Jacobian norms (approximate Lipschitz constants)
-    enc_lip = compute_empirical_lipschitz(lambda x: model.encode(x), samples, perturbed, delta)
-
-    koop_lip = compute_empirical_lipschitz(
-        lambda x: model.components.koopman_matrix(x),
-        model.encode(samples),
-        model.encode(perturbed),
-        delta,
-    )
-
-    dec_lip = compute_empirical_lipschitz(
-        lambda x: model.decode(x),
-        model.components.koopman_matrix(model.encode(samples)),
-        model.components.koopman_matrix(model.encode(perturbed)),
-        delta,
-    )
-
-    return {"encoder": enc_lip, "koopman": koop_lip, "decoder": dec_lip}
-
-
-def compute_empirical_lipschitz(function, x, x_perturbed, delta):
-    with torch.no_grad():
-        y = function(x)
-        y_perturbed = function(x_perturbed)
-
-    output_diff = torch.norm(y_perturbed - y, dim=1)
-    input_diff = torch.norm(x_perturbed - x, dim=1)
-
-    # Lipschitz constant is the maximum ratio of output difference to input difference
-    lipschitz = (output_diff / (input_diff + 1e-10)).max().item()
-
-    return lipschitz
 
 
 @click.command()
@@ -316,39 +305,51 @@ def compute_empirical_lipschitz(function, x, x_perturbed, delta):
 def main(data_path, mlp_path, ae_path):
     device = get_device()
 
-    # Load MLP
-    model_name = "resmlp"
-    model, model_metadata = load_model(mlp_path, model_name)
-    model = model.to(device)
+    # Load MLPs
+    model_names = [
+        "mlp_mnist_shallowaf_adv",
+        "mlp_mnist_shallow_adv",
+        "mlp_mnist_deep_adv",
+        "mlp_mnist_deepaf_adv",
+        "resmlp_mnist_shallowaf_adv",
+        "resmlp_mnist_shallow_adv",
+        "resmlp_mnist_deep_adv",
+        "resmlp_mnist_deepaf_adv",
+    ]
+    models = [load_model(mlp_path, name)[0].to(device) for name in model_names]
 
-    # Load autoencoder
+    # Load autoencoders
     ae_names = [
         # f"dim_{256}_k_{1}_loc_{0}_lowrank_{20}_autoencoder_mnist_model",
         # f"dim_{512}_k_{1}_loc_{0}_lowrank_{10}_autoencoder_mnist_model",
         # f"dim_{512}_k_{1}_loc_{0}_lowrank_{20}_autoencoder_mnist_model",
         # f"dim_{1024}_k_{1}_loc_{0}_lowrank_{10}_autoencoder_mnist_model",
-        f"dim_{1024}_k_{1}_loc_{0}_lowrank_{20}_autoencoder_mnist_model_adv",
+        # f"dim_{1024}_k_{1}_loc_{0}_lowrank_{20}_autoencoder_mnist_model_adv",
         # f"dim_{2048}_k_{1}_loc_{0}_lowrank_{10}_autoencoder_mnist_model",
-        f"dim_{2048}_k_{1}_loc_{0}_lowrank_{20}_autoencoder_mnist_model_adv",
+        # f"dim_{2048}_k_{1}_loc_{0}_lowrank_{20}_autoencoder_mnist_model_adv",
     ]
     autoencoders = [load_autoencoder(ae_path, name)[0].to(device) for name in ae_names]
 
     # Load dataset
+    _, model_metadata = load_model(mlp_path, model_names[0])
     dataset = load_dataset(model_metadata, data_path)
 
-    # Sensitivity
-    for name, ae in zip(ae_names, autoencoders):
-        lipschitz_results = analyze_lipschitz_constants(ae)
-        logger.info(name)
-        logger.info(lipschitz_results)
-
     # Attack
-    results = adv_attack(dataset, model, ae_names, autoencoders, device)
+    results = adv_attack(
+        dataset=dataset,
+        model_names=model_names,
+        ae_names=ae_names,
+        models=models,
+        autoencoders=autoencoders,
+        device=device,
+    )
 
     # Writing to JSON file
+    logger.info("Dumping.")
     with open("../adv_output/results.json", "w+") as json_file:
         json.dump(results, json_file, indent=4)
 
+    # Plot results
     logger.info("Plotting.")
     plot_attack_results(results)
 

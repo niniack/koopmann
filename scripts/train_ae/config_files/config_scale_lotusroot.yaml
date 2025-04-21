@@ -9,13 +9,13 @@ train_data:
 optim:
   num_epochs: 5_000
   learning_rate: 1e-2
-  weight_decay: 1e-2
+  weight_decay: 1e-4
   type: "adamw"
 
 scale:
   model_to_scale: "/scratch/nsa325/koopmann_model_saves/resmlp.safetensors"
   scale_location: 1
-  num_scaled_layers: 1
+  num_scaled_layers: 10
 
 wandb: 
     use_wandb: true
@@ -24,14 +24,15 @@ wandb:
 
 autoencoder:
   ae_dim: 20
-  hidden_config: [40]
+  hidden_config: [20, 40]
   ae_nonlinearity: "leaky_relu"
   batchnorm: False
   lambda_reconstruction: 1
-  lambda_prediction: 1e-3
-  lambda_id: 1
-  koopman_param: "lowrank"
-  koopman_rank: 10
+  lambda_state_pred: 1e-1
+  lambda_latent_pred: 1e-1
+  lambda_isometric: 1e-1
+  koopman_param: "exponential"
+  # koopman_rank: 20
 
 task_type: "autoencoder"
 batch_size: 1_000

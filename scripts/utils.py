@@ -1,29 +1,25 @@
-import pdb
 import sys
+from collections import OrderedDict
 from copy import deepcopy
 from pathlib import Path
-from typing import Optional, Type, TypeVar, Union
+from typing import Literal, Optional, Type, TypeVar, Union
 
 import torch
 import yaml
+from hessian_eigenthings import compute_hessian_eigenthings
 from neural_collapse.accumulate import (
     CovarAccumulator,
-    DecAccumulator,
     MeanAccumulator,
     VarNormAccumulator,
 )
 from neural_collapse.kernels import kernel_stats, log_kernel
 from neural_collapse.measure import (
-    clf_ncc_agreement,
     covariance_ratio,
-    orthogonality_deviation,
-    self_duality_error,
-    similarities,
     simplex_etf_error,
-    variability_cdnv,
 )
 from pydantic import BaseModel
 from torch import optim
+from torch.optim.lr_scheduler import CyclicLR
 from torch.utils.data import DataLoader
 
 import wandb
@@ -36,34 +32,71 @@ from koopmann.utils import set_seed
 T = TypeVar("T", bound=BaseModel)
 
 
-def get_dataloaders(config):
+def compute_curvature(model, dataloader, device):
+    eigenvalues, eigenvectors = compute_hessian_eigenthings(
+        model=model,
+        dataloader=dataloader,
+        loss=torch.nn.CrossEntropyLoss(),
+        num_eigenthings=1,
+        full_dataset=True,
+        mode="power_iter",
+        power_iter_steps=20,
+        power_iter_err_threshold=1e-3,
+        use_gpu=True if device != "cpu" else False,
+    )
+    return eigenvalues[0]
+
+
+def get_lr_schedule(lr_schedule_type: Literal["cyclic", "piecewise"], n_epochs, lr_max, optimizer):
+    if lr_schedule_type == "cyclic":
+        step_size_up = int(n_epochs * 2 / 5)
+        step_size_down = n_epochs - step_size_up
+        scheduler = CyclicLR(
+            optimizer,
+            base_lr=0,
+            max_lr=lr_max,
+            step_size_up=step_size_up,
+            step_size_down=step_size_down,
+            cycle_momentum=False,  # Don't adjust momentum
+            mode="triangular",  # Use triangular pattern (linear up, linear down)
+        )
+    else:
+        raise ValueError("wrong lr_schedule_type")
+    return scheduler
+
+
+def get_dataloaders(config, train_batch_size=None, test_batch_size=None, shuffle=True):
     # Train data
+    train_size = train_batch_size if train_batch_size else config.batch_size
     DatasetClass = get_dataset_class(name=config.train_data.dataset_name)
     train_dataset = DatasetClass(config=config.train_data)
     train_loader = DataLoader(
         train_dataset,
-        batch_size=config.batch_size,
-        shuffle=True,
+        batch_size=train_size,
+        shuffle=shuffle,
         pin_memory=True,
         persistent_workers=True,
         num_workers=4,
+        prefetch_factor=4,
     )
 
     # Test data
+    test_size = test_batch_size if test_batch_size else config.batch_size
     original_split = config.train_data.split
     config.train_data.split = "test"
     test_dataset = DatasetClass(config=config.train_data)
     config.train_data.split = original_split
     test_loader = DataLoader(
         test_dataset,
-        batch_size=config.batch_size,
-        shuffle=True,
+        batch_size=test_size,
+        shuffle=shuffle,
         pin_memory=True,
         persistent_workers=True,
         num_workers=4,
+        prefetch_factor=4,
     )
 
-    return train_loader, test_loader, test_dataset
+    return train_loader, test_loader, train_dataset, test_dataset
 
 
 def get_optimizer(config, model):
@@ -86,6 +119,20 @@ def get_optimizer(config, model):
         raise NotImplementedError("Pick either 'sgd' or 'adamw'")
 
     return optimizer
+
+
+# Iterating function
+def iterate_by_batches(act_dict, batch_size):
+    keys = list(act_dict.keys())
+    num_samples = act_dict[keys[0]].shape[0]
+
+    for start_idx in range(0, num_samples, batch_size):
+        end_idx = min(start_idx + batch_size, num_samples)
+
+        # Create a dictionary with the current batch from each tensor
+        batch_dict = OrderedDict((key, act_dict[key][start_idx:end_idx]) for key in keys)
+
+        yield batch_dict
 
 
 def compute_neural_collapse_metrics(model, config, dataloader, device):

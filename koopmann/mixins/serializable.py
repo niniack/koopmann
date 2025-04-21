@@ -63,7 +63,7 @@ class Serializable(ABC):
             model_name = self.__class__.__name__.lower()
 
             # Apply suffix if provided
-            if suffix:
+            if suffix and suffix != "":
                 model_name = f"{model_name}_{suffix}"
 
             filename = f"{model_name}.safetensors"

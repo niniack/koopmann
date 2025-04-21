@@ -6,17 +6,13 @@ __all__ = [
     "FrankensteinKoopmanAutoencoder",
 ]
 
-import math
 import warnings
 from collections import namedtuple
 from typing import Any, Optional
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.nn.utils.parametrize as parametrize
-from torch import Tensor
-from torch.nn.utils.parametrizations import spectral_norm
 
 from koopmann.models.base import BaseTorchModel
 from koopmann.models.layers import LinearLayer, LoRALinearLayer
@@ -39,6 +35,7 @@ class Autoencoder(BaseTorchModel):
         bias: bool = True,
         batchnorm: bool = False,
         nonlinearity: str = "leaky_relu",
+        **kwargs,
     ):
         super().__init__()
 
@@ -153,6 +150,7 @@ class KoopmanAutoencoder(Autoencoder):
         batchnorm: bool = False,
         nonlinearity: str = "leaky_relu",
         use_eigeninit: Optional[bool] = False,
+        **kwargs,
     ):
         super().__init__(
             in_features=in_features,
@@ -204,7 +202,7 @@ class KoopmanAutoencoder(Autoencoder):
             steps, batch_size, latent_dim = stacked_predictions.size()
             # Shape: [steps * batch, feature_dim]
             reshaped_predictions = stacked_predictions.view(-1, latent_dim)
-            decoded = self.decoder(reshaped_predictions)
+            decoded = self.components.decoder(reshaped_predictions)
             # Shape: [steps, batch, latent_dim]
             x_k = decoded.view(steps, batch_size, -1)
 
@@ -281,6 +279,7 @@ class LowRankKoopmanAutoencoder(KoopmanAutoencoder):
         batchnorm: bool = False,
         nonlinearity: str = "leaky_relu",
         use_eigeninit: Optional[bool] = False,
+        **kwargs,
     ):
         super().__init__(
             k_steps,

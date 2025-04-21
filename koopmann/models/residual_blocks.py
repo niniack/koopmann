@@ -136,12 +136,13 @@ class LinearResidualBlock(BaseResidualBlock):
 class Conv2DResidualBlock(BaseResidualBlock):
     """
     Residual block for ConvResNet, consisting of two convolutional layers.
-    NOTE: This implementation assumes that both layers are have the same channels.
+    Handles changes in both spatial dimensions (via stride) and channel dimensions.
     """
 
     def __init__(
         self,
-        channels: int,
+        in_channels: int,
+        out_channels: int,
         kernel_size: int = 3,
         stride: int = 1,
         bias: bool = False,
@@ -154,8 +155,8 @@ class Conv2DResidualBlock(BaseResidualBlock):
             bias=bias,
             batchnorm=batchnorm,
             nonlinearity=nonlinearity,
-            in_channels=channels,
-            out_channels=channels,
+            in_channels=in_channels,
+            out_channels=out_channels,
             drop_prob=drop_prob,
             stoch_mode=stoch_mode,
         )
@@ -164,10 +165,10 @@ class Conv2DResidualBlock(BaseResidualBlock):
 
         # Determine if we need a projection shortcut (1x1 conv) for changing dimensions
         self.downsample = None
-        if stride != 1:
+        if stride != 1 or in_channels != out_channels:
             self.downsample = Conv2DLayer(
-                in_channels=channels,
-                out_channels=channels,
+                in_channels=in_channels,
+                out_channels=out_channels,
                 kernel_size=1,
                 stride=stride,
                 padding=0,
@@ -180,8 +181,8 @@ class Conv2DResidualBlock(BaseResidualBlock):
         # First convolutional layer
         padding = kernel_size // 2  # Same padding
         conv1 = Conv2DLayer(
-            in_channels=channels,
-            out_channels=channels,
+            in_channels=in_channels,
+            out_channels=out_channels,
             kernel_size=kernel_size,
             stride=stride,
             padding=padding,
@@ -194,8 +195,8 @@ class Conv2DResidualBlock(BaseResidualBlock):
 
         # Second convolutional layer
         conv2 = Conv2DLayer(
-            in_channels=channels,
-            out_channels=channels,
+            in_channels=out_channels,  # Input channels now match output of first conv
+            out_channels=out_channels,
             kernel_size=kernel_size,
             stride=1,  # Always stride 1 for the second conv
             padding=padding,

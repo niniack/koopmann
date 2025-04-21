@@ -1,16 +1,130 @@
-import pdb
+import copy
+from collections import OrderedDict
 
 import torch
 import torch.nn.functional as F
 from torch import linalg
 
+import wandb
+from scripts.utils import DotDict
+
+
+############ METRICS ##################
+class AutoencoderMetrics:
+    def __init__(self, device):
+        """Initialize the metrics computation state."""
+
+        self.metric_to_method_dict = {
+            "reconstruction": compute_state_recons_loss,
+            "state_pred": compute_state_prediction_loss,
+            "latent_pred": compute_latent_prediction_loss,
+            "distance": compute_isometric_loss,
+        }
+        self.device = device
+        self.reset()
+
+    def reset(self) -> "AutoencoderMetrics":
+        """Reset the internal state to initial values."""
+
+        self.batch_metrics = DotDict()
+        for name, _ in self.metric_to_method_dict.items():
+            self.batch_metrics[f"raw_{name}"] = torch.tensor(0.0, device=self.device)
+            self.batch_metrics[f"fvu_{name}"] = torch.tensor(0.0, device=self.device)
+
+        # Extras
+        self.batch_metrics["combined_loss"] = torch.tensor(0.0, device=self.device)
+
+        self.total_metrics = copy.deepcopy(self.batch_metrics)
+        self.num_batches = 0
+
+        return self
+
+    def update(self, autoencoder, act_dict, k_steps) -> OrderedDict:
+        """Compute losses."""
+        # Compute each core loss
+        for name, method in self.metric_to_method_dict.items():
+            raw, fvu = method(
+                act_dict=act_dict,
+                autoencoder=autoencoder,
+                k=k_steps,
+            )
+
+            self.batch_metrics[f"raw_{name}"] = raw
+            self.batch_metrics[f"fvu_{name}"] = fvu
+
+        # # Non-core loss
+        # self.batch_metrics["shaping_loss"] = compute_eigenvector_shaping_loss(
+        #     act_dict, autoencoder, labels
+        # )
+
+        # Update totals
+        self.num_batches += 1
+        for key, value in self.batch_metrics.items():
+            self.total_metrics[key] += value.detach()
+
+    def log_metrics(self, epoch: int, prefix: str) -> None:
+        """Log training metrics to wandb."""
+
+        log_dict = {}
+        log_dict["epoch"] = epoch
+        for key, value in self.total_metrics.items():
+            log_dict[f"{prefix}/{key}"] = value / self.num_batches
+
+        wandb.log(log_dict, step=epoch)
+
+    def set_weighted_loss(self, loss):
+        self.total_metrics["combined_loss"] += loss.detach()
+        return self
+
+    def compute(self) -> DotDict:
+        if self.num_batches == 0:
+            self.avg_metrics = DotDict({k: 0.0 for k in self.total_metrics.keys()})
+
+        self.avg_metrics = DotDict(
+            {k: v.item() / self.num_batches for k, v in self.total_metrics.items()}
+        )
+
+        return self.avg_metrics
+
 
 #################################### Reconstruction Loss ####################################
-def compute_state_space_recons_loss(act_dict, autoencoder, k, probed) -> tuple:
-    if probed:
-        return _probing_recons_loss(act_dict, autoencoder)
-    else:
-        return _padding_recons_loss(act_dict, autoencoder)
+def compute_state_recons_loss(act_dict, autoencoder, k) -> tuple:
+    """
+    Computes the reconstruction loss in *state space*.
+    """
+    return _recons_loss(act_dict, autoencoder)
+
+
+def _recons_loss(act_dict, autoencoder) -> tuple:
+    acts = list(act_dict.values())
+
+    # Stack along layers dimension
+    # shape: [batch, layers, neurons]
+    acts = torch.stack(acts, dim=1)
+
+    # Reconstruct each layer’s padded activation
+    # k=0 means no Koopman stepping
+    recons_acts = [autoencoder(act, k=0).reconstruction for act in acts.unbind(dim=1)]
+
+    # Stack reconstructed acts
+    # shape: [batch, layers, neurons]
+    recons_acts = torch.stack(recons_acts, dim=1)
+
+    # Difference in state space, ignoring masked-out neurons
+    # shape: [batch, layers, neurons]
+    diff = acts - recons_acts
+
+    # shape: [layers]
+    recons_error = diff.pow(2).mean(dim=[0, 2])
+
+    # Total variance in state space
+    # shape: [batch, layers, neurons]
+    centered_acts = acts - acts.mean(dim=[0], keepdim=True)
+
+    # shape: [layers]
+    total_variance_state_space = centered_acts.pow(2).mean(dim=[0, 2])
+
+    return recons_error.mean(), (recons_error / total_variance_state_space).mean()
 
 
 def _padding_recons_loss(act_dict, autoencoder) -> tuple:
@@ -83,30 +197,59 @@ def _probing_recons_loss(act_dict, autoencoder) -> tuple:
     # return avg_mse, avg_fvu
 
 
+########################## K-Step Prediction Loss (State Space) ##########################
+def compute_state_prediction_loss(act_dict, autoencoder, k) -> tuple:
+    """
+    Computes the k-step prediction loss in *state space*.
+    """
+    return _state_prediction_loss(act_dict, autoencoder, k)
+
+
+def _state_prediction_loss(act_dict, autoencoder, k) -> tuple:
+    acts = list(act_dict.values())
+
+    # shape: [batch, neurons]
+    starting_acts = acts[0]
+    target_acts = acts[-1]
+
+    # Get autoencoder predictions
+    # shape [layers, batch, neurons]
+    all_preds = autoencoder(x=starting_acts, k=k).predictions
+
+    # The final prediction is stored at all_preds[-1].
+    pred_k = all_preds[-1]
+
+    # Square the difference and average across all dimensions
+    # shape: [1]
+    state_space_pred_error = (pred_k - target_acts).pow(2).mean(dim=[0, 1])
+
+    # Total variance
+    # shape: [1]
+    total_variance = (target_acts - target_acts.mean(dim=0)).pow(2).mean(dim=[0, 1])
+
+    return state_space_pred_error, state_space_pred_error / total_variance
+
+
 ########################## K-Step Loss (Latent Space) ##########################
-def compute_latent_space_prediction_loss(act_dict, autoencoder, k, probed) -> tuple:
+def compute_latent_prediction_loss(act_dict, autoencoder, k) -> tuple:
     """
     Computes the k-step prediction loss purely in the *latent space*.
-    We encode each layer’s activation into latent space, then compare
-    the predicted next-layer embedding (via the Koopman matrix)
-    with the actual final-layer embedding.
     """
     return _latent_prediction_loss(act_dict, autoencoder, k)
 
 
 def _latent_prediction_loss(act_dict, autoencoder, k) -> tuple:
-    # Prepare padded activations (we don't need masks for latent space)
-    padded_acts, _ = prepare_padded_acts_and_masks(act_dict, autoencoder)
+    acts = list(act_dict.values())
 
     # Encode each layer’s padded activation into latent space
-    latent_acts = [autoencoder.encode(padded_act) for padded_act in padded_acts]
+    latent_acts = [autoencoder.encode(act) for act in acts]
 
     # shape: [batch, layers, latent]
     latent_acts = torch.stack(latent_acts, dim=1)
 
     # NOTE: Is this right? I think we should be detaching these to prevent a complicated
     # computational graph.
-    # latent_acts = latent_acts.detach()
+    latent_acts = latent_acts.detach()
 
     # Koopman step: multiply the *first* layer’s latent by K^k
     K_matrix = autoencoder.koopman_weights.T
@@ -127,45 +270,13 @@ def _latent_prediction_loss(act_dict, autoencoder, k) -> tuple:
     return latent_error, latent_error / total_variance_latent_space
 
 
-########################## K-Step Prediction Loss (State Space) ##########################
-def compute_k_prediction_loss(act_dict, autoencoder, k, probed) -> tuple:
-    """
-    Computes the k-step prediction loss in *state space* for the final activation.
-    Compares the predicted state at k steps with the actual final-layer activation.
-    """
-    return _k_prediction_loss(act_dict, autoencoder, k)
-
-
-def _k_prediction_loss(act_dict, autoencoder, k) -> tuple:
-    padded_acts, _ = prepare_padded_acts_and_masks(act_dict, autoencoder)
+########################## Isometric Loss ##########################
+def compute_isometric_loss(act_dict, autoencoder, k) -> tuple:
+    acts = list(act_dict.values())
 
     # shape: [batch, neurons]
-    starting_acts = padded_acts[0]
-    target_acts = padded_acts[-1]
-
-    # Get autoencoder predictions
-    # shape [layers, batch, neurons]
-    all_preds = autoencoder(x=starting_acts, k=k).predictions
-
-    # The final prediction is stored at all_preds[-1].
-    pred_k = all_preds[-1, :, : target_acts.size(-1)]
-
-    # Square the difference and average across all dimensions
-    # shape: [1]
-    state_space_pred_error = (pred_k - target_acts).pow(2).mean(dim=[0, 1])
-
-    # Total variance
-    # shape: [1]
-    total_variance = (target_acts - target_acts.mean(dim=0)).pow(2).mean(dim=[0, 1])
-
-    return state_space_pred_error, state_space_pred_error / total_variance
-
-
-########################## Isometric Loss ##########################
-def compute_isometric_loss(act_dict, autoencoder, k, probed) -> tuple:
-    padded_acts, _ = prepare_padded_acts_and_masks(act_dict, autoencoder)
-    starting_acts = padded_acts[0]  # shape: [batch, neurons]
-    target_acts = padded_acts[-1]  # shape: [batch, neurons]
+    starting_acts = acts[0]
+    target_acts = acts[-1]
 
     # Encode both starting and target states
     encoded_starting = autoencoder.components.encoder(starting_acts)
@@ -241,6 +352,20 @@ def compute_eigenvector_shaping_loss(act_dict, autoencoder, labels) -> torch.Ten
 
         loss += left_residual
     return loss
+
+
+########################## Nuclear Norm Loss ##########################
+# # NOTE: adhoc implementation of nuclear norm
+# nuc_norm = torch.tensor(0.0).to(device)
+# for name, module in autoencoder.named_modules():
+#     if isinstance(module, torch.nn.Linear):
+#         if "decoder" in name or "encoder" in name:
+#             weight = module.weight
+#             nuc_norm += torch.linalg.norm(weight, ord="nuc")
+#     elif "koopman" in name and isinstance(module, Layer):
+#         weight = (module.components.lora_up.weight @ module.components.lora_down.weight).T
+#         nuc_norm += torch.linalg.norm(weight, ord="nuc")
+# loss += 1e-4 * nuc_norm
 
 
 ########################## Replacement ##########################

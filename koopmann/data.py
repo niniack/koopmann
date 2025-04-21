@@ -374,11 +374,11 @@ class MNISTDataset(datasets.MNIST):
         )
         self.seed = seed
         self.config = config
-        self.in_features = 784
         self.labels = self.targets
-        self.mean = 0.1307
-        self.std = 0.3081
-        self.num_classes = 10
+        self.mean = (0.1307,)
+        self.std = (0.3081,)
+        self.in_features = (1, 28, 28)
+        self.out_features = 10
 
     def name(self):
         return "MNISTDataset"
@@ -435,7 +435,8 @@ class FashionMNISTDataset(datasets.FashionMNIST):
         super().__init__(root=root, train=train, download=True, transform=self.transform)
         self.seed = seed
         self.config = config
-        self.in_features = 784  # FashionMNIST images are 28x28
+        self.in_features = (1, 28, 28)
+        self.out_features = 10
         self.labels = self.targets
 
     def name(self):
@@ -445,12 +446,24 @@ class FashionMNISTDataset(datasets.FashionMNIST):
 class CIFAR10Dataset(datasets.CIFAR10):
     """Simple wrapper around the CIFAR-10 dataset with default configurations."""
 
-    default_transform = transforms.Compose(
+    train_transform = transforms.Compose(
+        [
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),  # Convert images to tensors and scale to [0, 1]
+            transforms.Normalize(
+                mean=(0.4914, 0.4822, 0.4465),
+                std=(0.2470, 0.2435, 0.2616),
+            ),
+        ]
+    )
+
+    test_transform = transforms.Compose(
         [
             transforms.ToTensor(),  # Convert images to tensors and scale to [0, 1]
             transforms.Normalize(
-                mean=(0.4914, 0.4822, 0.4465),  # Mean for CIFAR-10
-                std=(0.2470, 0.2435, 0.2616),  # Standard deviation for CIFAR-10
+                mean=(0.4914, 0.4822, 0.4465),
+                std=(0.2470, 0.2435, 0.2616),
             ),
         ]
     )
@@ -462,13 +475,20 @@ class CIFAR10Dataset(datasets.CIFAR10):
         transform=None,  # Torch transforms, uses default CIFAR-10 transform if None
         root="/scratch/nsa325/datasets/",  # Dataset location
     ):
-        self.transform = transform or self.default_transform
         train = True if config.split == "train" else False
+
+        if transform:
+            self.transform = transform
+        else:
+            self.transform = self.train_transform if train else self.test_transform
         super().__init__(root=root, train=train, download=True, transform=self.transform)
         self.seed = seed
         self.config = config
-        self.in_features = 3072  # CIFAR-10 has 32x32x3 inputs
         self.labels = self.targets
+        self.mean = (0.4914, 0.4822, 0.4465)
+        self.std = (0.2470, 0.2435, 0.2616)
+        self.in_features = (3, 32, 32)  # CHW
+        self.out_features = 10
 
     def name(self):
         return "CIFAR10Dataset"

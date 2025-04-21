@@ -1,3 +1,4 @@
+from collections import OrderedDict
 from pathlib import Path
 
 import pytest
@@ -11,7 +12,7 @@ from koopmann.models.conv_resnet import ConvResNet
 @pytest.mark.parametrize("in_channels", [1, 3])
 @pytest.mark.parametrize("out_channels", [10, 100])
 @pytest.mark.parametrize("input_size", [(32, 32), (64, 64)])
-@pytest.mark.parametrize("channels_config", [[64, 128, 256], [32, 64, 128]])
+@pytest.mark.parametrize("hidden_config", [[64, 128, 256], [32, 64, 128]])
 @pytest.mark.parametrize("blocks_per_stage", [[2, 2, 2], [1, 1, 1]])
 @pytest.mark.parametrize("nonlinearity", ["relu", "leaky_relu"])
 @pytest.mark.parametrize("bias", [True, False])
@@ -22,7 +23,7 @@ def test_init_convresnet(
     in_channels,
     out_channels,
     input_size,
-    channels_config,
+    hidden_config,
     blocks_per_stage,
     nonlinearity,
     bias,
@@ -32,14 +33,14 @@ def test_init_convresnet(
 ):
     # Create ConvResNet with various configurations
     model = ConvResNet(
-        in_channels=in_channels,
-        out_channels=out_channels,
+        in_features=in_channels,
+        out_features=out_channels,
         input_size=input_size,
-        channels_config=channels_config,
+        hidden_config=hidden_config,
         blocks_per_stage=blocks_per_stage,
-        nonlinearity=nonlinearity,
         bias=bias,
         batchnorm=batchnorm,
+        nonlinearity=nonlinearity,
         stochastic_depth_prob=stochastic_depth_prob,
         stochastic_depth_mode=stochastic_depth_mode,
     )
@@ -48,11 +49,11 @@ def test_init_convresnet(
     assert model.in_channels == in_channels
     assert model.out_channels == out_channels
     assert model.input_size == input_size
-    assert model.channels_config == channels_config
+    assert model.hidden_config == hidden_config
     assert model.blocks_per_stage == blocks_per_stage
 
     # Check model structure
-    modules = list(model.modules.children())
+    modules = list(model.components.children())
 
     # Check initial convolution
     assert isinstance(modules[0], nn.Module)
@@ -90,7 +91,7 @@ def test_save_load_convresnet(tmp_path):
         in_channels=3,
         out_channels=10,
         input_size=(32, 32),
-        channels_config=[64, 128, 256],
+        hidden_config=[64, 128, 256],
         blocks_per_stage=[2, 2, 2],
         nonlinearity="relu",
         bias=True,
@@ -108,7 +109,7 @@ def test_save_load_convresnet(tmp_path):
     assert model.in_channels == loaded_model.in_channels
     assert model.out_channels == loaded_model.out_channels
     assert model.input_size == loaded_model.input_size
-    assert model.channels_config == loaded_model.channels_config
+    assert model.hidden_config == loaded_model.hidden_config
     assert model.blocks_per_stage == loaded_model.blocks_per_stage
     assert model.nonlinearity == loaded_model.nonlinearity
     assert model.bias == loaded_model.bias
@@ -117,8 +118,8 @@ def test_save_load_convresnet(tmp_path):
     assert model.stochastic_depth_mode == loaded_model.stochastic_depth_mode
 
     # Compare a few layer weights (initial conv and final FC)
-    initial_layers = list(model.modules.children())
-    loaded_layers = list(loaded_model.modules.children())
+    initial_layers = list(model.components.children())
+    loaded_layers = list(loaded_model.components.children())
 
     # Compare initial convolution layer weights
     testing.assert_close(
@@ -129,46 +130,38 @@ def test_save_load_convresnet(tmp_path):
     testing.assert_close(initial_layers[-1].weight, loaded_layers[-1].weight)
 
 
-def test_hook_and_activation_methods():
-    # Create ConvResNet
+@pytest.mark.parametrize("detach", [True, False])
+def test_forward_activations(detach):  # Create ConvResNet
     model = ConvResNet(
-        in_channels=3,
-        out_channels=10,
+        in_features=3,
+        out_features=10,
         input_size=(32, 32),
-        channels_config=[64, 128, 256],
+        hidden_config=[32, 64, 128],
         blocks_per_stage=[2, 2, 2],
     )
 
-    # Hook the model
-    model.hook_model()
-
-    # Verify hooks are set
-    for name, module in model.modules.named_modules():
-        if hasattr(module, "is_hooked"):
-            assert module.is_hooked
+    model.eval().hook_model().to("cpu")
 
     # Perform forward pass
-    input_tensor = torch.randn(5, 3, 32, 32)
-    _ = model(input_tensor)
+    input = testing.make_tensor((1, 3, 32, 32), device="cpu", dtype=torch.float32)
+    _ = model(input)
 
     # Test get_fwd_activations
-    activations = model.get_fwd_activations()
-    assert len(activations) > 0
+    activations = model.get_forward_activations(detach)
+    assert len(activations) == len(model.components)
+    assert isinstance(activations, OrderedDict)
 
-    # Test get_fwd_acts_patts
-    activations, patterns = model.get_fwd_acts_patts()
-    assert len(activations) > 0
-    assert len(patterns) > 0
-    assert len(activations) == len(patterns)
+    for act in activations.values():
+        assert act.requires_grad != detach
 
 
 def test_edge_cases():
     # Test with minimal configuration
     model_minimal = ConvResNet(
-        in_channels=1,
-        out_channels=2,
+        in_features=1,
+        out_features=2,
         input_size=(16, 16),
-        channels_config=[16],
+        hidden_config=[16],
         blocks_per_stage=[1],
     )
 
@@ -179,7 +172,7 @@ def test_edge_cases():
 
     # Test with extreme stochastic depth
     model_max_dropout = ConvResNet(
-        in_channels=3, out_channels=10, input_size=(32, 32), stochastic_depth_prob=1.0
+        in_features=3, out_features=10, input_size=(32, 32), stochastic_depth_prob=1.0
     )
 
     # Ensure model can be instantiated and forward pass works

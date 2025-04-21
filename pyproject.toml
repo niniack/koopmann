@@ -41,6 +41,8 @@ foolbox = "^3.3.4"
 click = "^8.1.8"
 adversarial-robustness-toolbox = "^1.19.1"
 panel = "^1.6.2"
+torchattacks = "^3.5.1"
+hessian-eigenthings = {git = "https://github.com/noahgolmant/pytorch-hessian-eigenthings.git", rev = "master"}
 
 [[tool.poetry.source]]
 name = "pytorch"
@@ -77,4 +79,4 @@ target-version = "py311"
 
 [tool.ruff.lint]
 ignore = ["F722"]
-unfixable = ["F401"] # Unused mports
+# unfixable = ["F401"] # Unused mports

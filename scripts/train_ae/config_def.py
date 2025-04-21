@@ -6,13 +6,23 @@ from pydantic import (
     ConfigDict,
     NonNegativeFloat,
     NonNegativeInt,
-    PositiveFloat,
     PositiveInt,
     model_validator,
 )
 
 from koopmann.data import DatasetConfig
-from scripts.common_config_def import OptimConfig, OptimParam, WandBConfig
+from scripts.common_config_def import OptimConfig, WandBConfig
+
+
+class AdvConfig(BaseModel):
+    use_adversarial_training: bool
+    epsilon: Optional[NonNegativeFloat] = None
+
+    @model_validator(mode="after")
+    def validate_epsilon(self) -> "AdvConfig":
+        if self.use_adversarial_training and self.epsilon is None:
+            raise ValueError("epsilon is required when use_adversarial_training is True")
+        return self
 
 
 # ScaleConfig for scale-related parameters
@@ -32,6 +42,8 @@ class KoopmanParam(str, Enum):
 
 class AutoencoderConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+    preprocess: bool
+    pca_dim: Optional[PositiveInt] = None  # Make optional with default None
     ae_dim: PositiveInt
     lambda_reconstruction: NonNegativeFloat
     lambda_state_pred: NonNegativeFloat
@@ -53,6 +65,13 @@ class AutoencoderConfig(BaseModel):
                 )
         return self
 
+    @model_validator(mode="after")
+    def val_preprocess_pca_dim(self) -> "AutoencoderConfig":
+        # Validate that pca_dim is provided when preprocess is True
+        if self.preprocess and self.pca_dim is None:
+            raise ValueError("`pca_dim` must be provided when `preprocess` is True")
+        return self
+
 
 # Main Config class
 class Config(BaseModel):
@@ -62,9 +81,11 @@ class Config(BaseModel):
     scale: ScaleConfig
     wandb: WandBConfig
     autoencoder: AutoencoderConfig
+    adv: AdvConfig
     batch_size: PositiveInt
     print_freq: PositiveInt
     seed: NonNegativeInt = 0
     task_type: str
     save_name: Optional[str] = None
     save_dir: Optional[str] = None
+    suffix: Optional[str] = None

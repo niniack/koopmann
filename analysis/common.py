@@ -1,8 +1,8 @@
 from koopmann.models import (
     MLP,
-    Autoencoder,
     ConvResNet,
     ExponentialKoopmanAutencoder,
+    KoopmanAutoencoder,
     LowRankKoopmanAutoencoder,
     ResMLP,
 )
@@ -14,7 +14,7 @@ def load_autoencoder(file_dir: str, ae_name: str):
 
     # Choose model based on flag
     if "standard" in ae_name:
-        AutoencoderClass = Autoencoder
+        AutoencoderClass = KoopmanAutoencoder
     elif "lowrank" in ae_name:
         AutoencoderClass = LowRankKoopmanAutoencoder
     elif "exponential" in ae_name:

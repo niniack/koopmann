@@ -23,7 +23,7 @@ wandb:
     project: "koopman_interp"
 
 adv: 
-    use_adversarial_training: True
+    use_adversarial_training: False
     epsilon: 0.3
 
 seed: 0
@@ -31,4 +31,4 @@ batch_size: 128
 print_freq: 5
 task_type: "classifier"
 save_dir: "/scratch/nsa325/koopmann_model_saves/"
-suffix: "mnist_delete"
+suffix: "mnist"

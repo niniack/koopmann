@@ -6,7 +6,7 @@ model:
 optim: 
     type: "sgd"
     weight_decay: 5e-4
-    num_epochs: 30
+    num_epochs: 100
     learning_rate: 1e-1
 
 train_data: 
@@ -23,7 +23,7 @@ wandb:
     project: "koopman_interp"
 
 adv: 
-    use_adversarial_training: True
+    use_adversarial_training: False
     epsilon: 0.08
 
 seed: 0

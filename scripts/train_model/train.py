@@ -6,18 +6,17 @@ import fire
 import numpy as np
 import torch
 import torchattacks
+import wandb
 from config_def import Config
 from torch import nn
 from torch.nn import Module
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 
-import wandb
 from koopmann.log import logger
 from koopmann.models import MLP, ResMLP, resnet18, resnet18_mnist
 from koopmann.utils import get_device
 from scripts.utils import (
-    compute_curvature,
     get_dataloaders,
     get_lr_schedule,
     get_optimizer,
@@ -348,12 +347,12 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]] = None):
             # nc_stats = compute_neural_collapse_metrics(model, config, test_loader, device)
             # metrics.update(nc_stats)
 
-            curvature = compute_curvature(
-                model=model,
-                dataloader=test_loader,
-                device=device,
-            )
-            metrics.update({"curvature": curvature})
+            # curvature = compute_curvature(
+            #     model=model,
+            #     dataloader=test_loader,
+            #     device=device,
+            # )
+            # metrics.update({"curvature": curvature})
 
             # Adv test stats
             adv_metrics = evaluate_adversarial_robustness(

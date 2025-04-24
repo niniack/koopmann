@@ -192,7 +192,7 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]] = None):
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, config.optim.num_epochs)
 
     # Preprocess activations
-    _, act_dict, preproc_dict = prepare_acts(
+    orig_act_dict, act_dict, preproc_dict = prepare_acts(
         data_train_loader=data_train_loader,
         model=model,
         device=device,

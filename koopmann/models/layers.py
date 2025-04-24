@@ -223,3 +223,58 @@ class Conv2DLayer(Layer):
             x = component(x)
 
         return x
+
+
+class Conv1DLayer(Layer):
+    """
+    1D Convolutional layer with built-in batchnorm and nonlinearity.
+    """
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: Union[int, Tuple[int]],
+        stride: Union[int, Tuple[int]] = 1,
+        padding: Union[int, Tuple[int]] = 0,
+        bias: bool = True,
+        batchnorm: bool = False,
+        nonlinearity: Optional[str] = "relu",
+    ):
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            bias=bias,
+            batchnorm=batchnorm,
+            nonlinearity=nonlinearity,
+        )
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
+
+        # Conv1d
+        self.components["conv"] = nn.Conv1d(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            bias=bias,
+        )
+
+        # Batchnorm (optional)
+        if batchnorm:
+            self.components["batchnorm"] = nn.BatchNorm1d(out_channels)
+
+        # Nonlinearity (optional)
+        if nonlinearity is not None:
+            self.components["nonlinearity"] = self.nonlinearity_module()
+
+    def forward(self, x):
+        if len(x.shape) != 3:
+            raise ValueError("Expects 3D input!")
+
+        for component in self.components.values():
+            x = component(x)
+
+        return x

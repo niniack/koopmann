@@ -1,10 +1,9 @@
 # Adapted from: https://github.com/wrongu/repsim
-
-
 from collections import OrderedDict
-from copy import deepcopy
 
 import torch
+
+from koopmann.log import logger
 
 
 def undo_processing(input_tensor, preproc_dict, index):
@@ -50,19 +49,27 @@ def prepare_acts(
                 batch_act_dict.pop(key)
 
         for key, acts in batch_act_dict.items():
+            acts_cpu = acts.cpu()  # <-- This is the key change
             if key in original_act_dict:
-                original_act_dict[key] = torch.cat([original_act_dict[key], acts], dim=0)
+                original_act_dict[key] = torch.cat([original_act_dict[key], acts_cpu], dim=0)
             else:
-                original_act_dict[key] = acts
+                original_act_dict[key] = acts_cpu
 
-    processed_act_dict = deepcopy(original_act_dict)
+    # Clear CUDA cache to ensure GPU memory is freed
+    torch.cuda.empty_cache()  # <-- Added this line
+
+    # We are using up a lot of memory.
+    # Does this help out the GPU?
+    del batch_act_dict
+
+    processed_act_dict = OrderedDict()
 
     # Initialize preprocessing dict if needed
     preprocess_dict = preprocess_dict or OrderedDict()
 
     if preprocess:
         for key, curr_act in original_act_dict.items():
-            processed_act = torch.flatten(curr_act.clone(), start_dim=1)
+            processed_act = torch.flatten(curr_act.clone().to(device), start_dim=1)
 
             # Mean center
             means = preprocess_dict.get(
@@ -80,11 +87,13 @@ def prepare_acts(
                 processed_act = processed_act @ preprocess_dict[f"directions_{key}"].T
 
             # Parameterized whitening
-            processed_act = Processor._whiten(processed_act, alpha=whiten_alpha)
+            # processed_act = Processor._whiten(processed_act, alpha=0.1)
+
+            # import numpy as np; import matplotlib.pyplot as plt; signal = (processed_act[0]).cpu(); side = int(np.sqrt(signal.shape[0])); plt.figure(figsize=(8, 8)); plt.imshow(signal[:side*side].reshape(side, side)); plt.colorbar(); plt.savefig('pca_signal.png'); plt.close()
 
             # Normalize
             norms = preprocess_dict.get(
-                f"norms_{key}", torch.linalg.norm(processed_act, ord="fro") / 100
+                f"norms_{key}", torch.linalg.norm(processed_act, ord="fro") / 1_00
             )
             if f"norms_{key}" not in preprocess_dict:
                 preprocess_dict[f"norms_{key}"] = norms.contiguous()
@@ -100,7 +109,10 @@ def prepare_acts(
                 _, aligned_act = Processor._orthogonal_procrustes(anchor_act, curr_act, anchor="a")
                 processed_act_dict[key] = aligned_act
 
-    return (original_act_dict, processed_act_dict, preprocess_dict)
+        return (original_act_dict, processed_act_dict, preprocess_dict)
+
+    else:
+        return (original_act_dict, processed_act_dict, preprocess_dict)
 
 
 class Processor:
@@ -178,18 +190,36 @@ class Processor:
         return torch.hstack([x.view(m, d), x.new_zeros(m, num_pad)])
 
     @staticmethod
-    def _dim_reduce(x, p):
+    def _dim_reduce(x, dim):
         # PCA to truncate -- project onto top p principal axes (no rescaling)
+
+        # NOTE: For large matrices, standard SVD is not stable.
         with torch.no_grad():
-            _, S, vT = torch.linalg.svd(x, full_matrices=False)
+            # _, S, Vh = torch.linalg.svd(x, full_matrices=False)
+            U, S, V = torch.svd_lowrank(x, q=dim, niter=5)
+            Vh = V.T
+
+        subset = x[:1000, :]
+        total_var = torch.norm(subset, p="fro") ** 2
+        error_squared = torch.norm(subset - (U[:1000, :] @ torch.diag(S) @ Vh), p="fro") ** 2
+        fvu = error_squared / total_var
+        logger.info(f"Dim: {dim}")
+        logger.info(f"Variance explained: {100*(1-fvu):.2f}%")
 
         # Fix sign ambiguity - make the component with largest magnitude positive
-        for i in range(min(p, vT.shape[0])):
-            max_idx = torch.argmax(torch.abs(vT[i]))
-            if vT[i, max_idx] < 0:
-                vT[i] *= -1
+        for i in range(min(dim, Vh.shape[0])):
+            max_idx = torch.argmax(torch.abs(Vh[i]))
+            if Vh[i, max_idx] < 0:
+                Vh[i] *= -1
+
+        # Permute
+        Vh_trunc = Vh[:dim, :]
+        # Vh_trunc = Vh[:dim, :][torch.randperm(dim), :]
+
+        # import numpy as np; import matplotlib.pyplot as plt; signal = (subset[0] @ Vh[:dim, :].T).cpu(); side = int(np.sqrt(signal.shape[0])); plt.figure(figsize=(8, 8)); plt.imshow(signal[:side*side].reshape(side, side)); plt.colorbar(); plt.savefig('pca_signal.png'); plt.close()
+        # import numpy as np; import matplotlib.pyplot as plt; signal = (subset[0] @ Vh_permuted.T).cpu(); side = int(np.sqrt(signal.shape[0])); plt.figure(figsize=(8, 8)); plt.imshow(signal[:side*side].reshape(side, side)); plt.colorbar(); plt.savefig('pca_signal.png'); plt.close()
 
         # svd returns v.T, so the principal axes are in the *rows*. The following einsum is
         # equivalent to x @ vT.T[:, :p] but a bit faster because the transpose is not actually
         # performed.
-        return torch.einsum("mn,pn->mp", x, vT[:p, :]), vT[:p, :]
+        return torch.einsum("mn,pn->mp", x, Vh_trunc), Vh_trunc

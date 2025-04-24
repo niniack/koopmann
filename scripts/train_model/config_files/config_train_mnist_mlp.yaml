@@ -1,7 +1,7 @@
 model: 
     conv: False
     residual: True
-    hidden_neurons: [784,784]
+    hidden_neurons: [784,784,784,784,784,784]
     bias: False
     batchnorm: True
 
@@ -25,7 +25,7 @@ wandb:
     project: "koopman_interp"
 
 adv: 
-    use_adversarial_training: True
+    use_adversarial_training: False
     epsilon: 0.08
 
 seed: 0
@@ -33,4 +33,4 @@ batch_size: 128
 print_freq: 5
 task_type: "classifier"
 save_dir: "/scratch/nsa325/koopmann_model_saves/"
-suffix: "mnist_delete"
+suffix: "mnist"

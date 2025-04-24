@@ -7,13 +7,13 @@ train_data:
   negative_label: False
 
 optim:
-  num_epochs: 500
+  num_epochs: 1_000
   learning_rate: 1e-3
   weight_decay: 5e-4
   type: "adamw"
 
 scale:
-  model_to_scale: "/scratch/nsa325/koopmann_model_saves/resmlp_mnist.safetensors"
+  model_to_scale: "/scratch/nsa325/koopmann_model_saves/convresnet_mnist.safetensors"
   scale_location: 1
   num_scaled_layers: 1
 
@@ -24,7 +24,7 @@ wandb:
 
 autoencoder:
   preprocess: True
-  pca_dim: 784
+  pca_dim: 800
   ae_dim: 1_024
   hidden_config: []
   ae_nonlinearity: "leaky_relu"
@@ -33,8 +33,8 @@ autoencoder:
   lambda_state_pred: 1e-1
   lambda_latent_pred: 1e-1
   lambda_isometric: 1e-1
-  koopman_param: "lowrank"
-  koopman_rank: 50
+  # koopman_param: "lowrank"
+  # koopman_rank: 200
 
 adv: 
     use_adversarial_training: False

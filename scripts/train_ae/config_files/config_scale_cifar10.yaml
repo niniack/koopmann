@@ -1,0 +1,49 @@
+train_data: 
+  dataset_name: "CIFAR10Dataset"
+  num_samples: 50_000
+  split: "train"
+  torch_transform: null
+  seed: 42
+  negative_label: False
+
+optim:
+  num_epochs: 1_000
+  learning_rate: 1e-3
+  weight_decay: 5e-4 
+  type: "adamw"
+
+scale:
+  model_to_scale: "/scratch/nsa325/koopmann_model_saves/convresnet_cifar10.safetensors"
+  scale_location: 1
+  num_scaled_layers: 1
+
+wandb: 
+    use_wandb: True
+    entity: "nishantaswani"
+    project: "koopman_interp"
+
+autoencoder:
+  preprocess: True
+  pca_dim: 1600
+  ae_dim: 2_048
+  hidden_config: []
+  ae_nonlinearity: "leaky_relu"
+  batchnorm: False
+  lambda_reconstruction: 1e0
+  lambda_state_pred: 1e-1
+  lambda_latent_pred: 1e-1
+  lambda_isometric: 1e-1
+  # koopman_param: "lowrank"
+  # koopman_rank: 200
+
+
+adv: 
+    use_adversarial_training: False
+    epsilon: 0.08
+
+task_type: "autoencoder"
+batch_size: 1_024
+seed: 21
+save_name: "cifar10_model"
+save_dir: "/scratch/nsa325/koopmann_model_saves/"
+print_freq: 5

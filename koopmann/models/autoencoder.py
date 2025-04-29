@@ -79,7 +79,8 @@ class Autoencoder(BaseTorchModel):
                 out_channels=channel_dims[i][1],
                 bias=self.bias,
                 batchnorm=self.batchnorm,
-                nonlinearity=self.nonlinearity,
+                nonlinearity=self.nonlinearity if (i != len(channel_dims) - 1) else None,
+                # nonlinearity=self.nonlinearity,
             )
 
             encoder_layer.apply(LinearLayer.init_weights)
@@ -88,6 +89,54 @@ class Autoencoder(BaseTorchModel):
             encoder.add_module(f"encoder_{i}", encoder_layer)
 
         return encoder
+
+    # def _build_encoder(self, channel_dims) -> nn.Sequential:
+    #     """Returns the encoder in a sequential container with conv1d layer first."""
+    #     encoder = nn.Sequential()
+
+    #     conv_channels = 8
+    #     kernel_size = 3
+    #     stride = 2
+    #     padding = kernel_size // 2
+    #     conv_output_size = (self.in_features + 2 * padding - kernel_size) // stride + 1
+
+    #     # Add Conv1D layer first
+    #     conv_layer = Conv1DLayer(
+    #         in_channels=1,  # Assuming input has shape [batch_size, 1, in_features]
+    #         out_channels=conv_channels,
+    #         kernel_size=kernel_size,
+    #         stride=stride,
+    #         padding=padding,  # Same padding
+    #         bias=self.bias,
+    #         batchnorm=self.batchnorm,
+    #         nonlinearity=self.nonlinearity,
+    #     )
+    #     encoder.add_module("encoder_conv", conv_layer)
+
+    #     # Reshape layer to flatten the conv output for linear layers
+    #     # This is needed to go from [batch_size, conv_channels, in_features] to [batch_size, conv_channels*in_features]
+    #     encoder.add_module("flatten", nn.Flatten())
+
+    #     # Adjust first linear layer input size to match flattened conv output
+    #     first_linear_in = conv_channels * conv_output_size
+
+    #     # Add linear layers
+    #     for i in range(0, len(channel_dims), 1):
+    #         # Adjust first layer's input dimension to match the flattened conv output
+    #         in_dim = first_linear_in if i == 0 else channel_dims[i][0]
+
+    #         encoder_layer = LinearLayer(
+    #             in_channels=in_dim,
+    #             out_channels=channel_dims[i][1],
+    #             bias=self.bias,
+    #             batchnorm=self.batchnorm,
+    #             nonlinearity=self.nonlinearity if (i != len(channel_dims) - 1) else None,
+    #         )
+
+    #         encoder_layer.apply(LinearLayer.init_weights)
+    #         encoder.add_module(f"encoder_linear_{i}", encoder_layer)
+
+    #     return encoder
 
     def _build_decoder(self, channel_dims) -> nn.Sequential:
         """Returns the decoder in a sequential container."""
@@ -110,6 +159,7 @@ class Autoencoder(BaseTorchModel):
         return decoder
 
     def encode(self, x):
+        x = x.unsqueeze(1)
         x = self.components.encoder(x)
         return x
 
@@ -169,6 +219,7 @@ class KoopmanAutoencoder(Autoencoder):
             batchnorm=False,
             nonlinearity=None,
         )
+        koopman_matrix.components.linear.weight.data.copy_(torch.eye(latent_features))
 
         if use_eigeninit:
             eigeninit(koopman_matrix.components.linear.weight, theta=0.3)
@@ -208,13 +259,10 @@ class KoopmanAutoencoder(Autoencoder):
 
         # Faster way, but no intermediate stores
         else:
-            if k == 1:
-                x_k = self.components.koopman_matrix(phi_x)
-            else:
-                K_effective_weight = torch.linalg.matrix_power(self.koopman_weights, k)
-                # NOTE: this K is transposed because of
-                # how torch handles matrix multiplication!
-                x_k = phi_x @ K_effective_weight.T
+            # NOTE: this K is transposed because of
+            # how torch handles matrix multiplication!
+            K_effective_weight = torch.linalg.matrix_power(self.koopman_weights.T, k)
+            x_k = phi_x @ K_effective_weight
             x_k = self.decode(x_k)
 
             # For compatibility
@@ -229,11 +277,7 @@ class KoopmanAutoencoder(Autoencoder):
     def _get_basic_metadata(self) -> dict[str, Any]:
         """Get model-specific metadata for serialization."""
         metadata = super()._get_basic_metadata()
-        metadata.update(
-            {
-                "k_steps": self.k_steps,
-            }
-        )
+        metadata.update({"k_steps": self.k_steps})
 
         return metadata
 

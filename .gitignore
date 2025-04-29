@@ -12,3 +12,4 @@ wandb/
 *.png
 *.jpeg
 adv_output/
+jobs/

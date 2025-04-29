@@ -65,11 +65,23 @@ def get_lr_schedule(lr_schedule_type: Literal["cyclic", "piecewise"], n_epochs, 
     return scheduler
 
 
-def get_dataloaders(config, train_batch_size=None, test_batch_size=None, shuffle=True):
+def get_dataloaders(
+    config,
+    train_batch_size=None,
+    test_batch_size=None,
+    shuffle=True,
+    train_subset=None,
+    test_subset=None,
+):
     # Train data
     train_size = train_batch_size if train_batch_size else config.batch_size
     DatasetClass = get_dataset_class(name=config.train_data.dataset_name)
     train_dataset = DatasetClass(config=config.train_data)
+
+    if train_subset:
+        subset_indices = list(range(0, train_subset))
+        train_dataset = torch.utils.data.Subset(train_dataset, subset_indices)
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=train_size,
@@ -86,6 +98,11 @@ def get_dataloaders(config, train_batch_size=None, test_batch_size=None, shuffle
     config.train_data.split = "test"
     test_dataset = DatasetClass(config=config.train_data)
     config.train_data.split = original_split
+
+    if test_subset:
+        subset_indices = list(range(0, test_subset))
+        test_dataset = torch.utils.data.Subset(test_dataset, subset_indices)
+
     test_loader = DataLoader(
         test_dataset,
         batch_size=test_size,
@@ -122,15 +139,26 @@ def get_optimizer(config, model):
 
 
 # Iterating function
-def iterate_by_batches(act_dict, batch_size):
+def iterate_by_batches(act_dict, batch_size, shuffle=True):
     keys = list(act_dict.keys())
     num_samples = act_dict[keys[0]].shape[0]
+
+    # Create shuffled indices if shuffle is True
+    if shuffle:
+        # Generate random permutation of indices
+        indices = torch.randperm(num_samples)
+    else:
+        # Use sequential indices if no shuffling
+        indices = torch.arange(num_samples)
 
     for start_idx in range(0, num_samples, batch_size):
         end_idx = min(start_idx + batch_size, num_samples)
 
-        # Create a dictionary with the current batch from each tensor
-        batch_dict = OrderedDict((key, act_dict[key][start_idx:end_idx]) for key in keys)
+        # Get the indices for this batch
+        batch_indices = indices[start_idx:end_idx]
+
+        # Create a dictionary with the current batch from each tensor using the shuffled indices
+        batch_dict = OrderedDict((key, act_dict[key][batch_indices]) for key in keys)
 
         yield batch_dict
 

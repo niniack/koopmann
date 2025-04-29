@@ -5,15 +5,14 @@ __all__ = [
 ]
 
 import sys
-from typing import Any, Callable, Literal, Tuple
+from typing import Callable, Literal
 
 import numpy as np
 import torch
-from PIL import Image
 from pydantic import BaseModel, ConfigDict
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Dataset
 from torchvision import datasets, transforms
-from torchvision.transforms import Lambda, ToTensor
+from torchvision.transforms import Lambda
 
 
 class DatasetConfig(BaseModel):
@@ -448,8 +447,8 @@ class CIFAR10Dataset(datasets.CIFAR10):
 
     train_transform = transforms.Compose(
         [
-            transforms.RandomCrop(32, padding=4),
-            transforms.RandomHorizontalFlip(),
+            # transforms.RandomCrop(32, padding=4),
+            # transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),  # Convert images to tensors and scale to [0, 1]
             transforms.Normalize(
                 mean=(0.4914, 0.4822, 0.4465),

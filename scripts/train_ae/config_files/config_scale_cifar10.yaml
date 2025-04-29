@@ -7,9 +7,9 @@ train_data:
   negative_label: False
 
 optim:
-  num_epochs: 1_000
+  num_epochs: 1_00
   learning_rate: 1e-3
-  weight_decay: 5e-4 
+  weight_decay: 1e-1
   type: "adamw"
 
 scale:
@@ -24,18 +24,17 @@ wandb:
 
 autoencoder:
   preprocess: True
-  pca_dim: 1600
-  ae_dim: 2_048
-  hidden_config: []
-  ae_nonlinearity: "leaky_relu"
+  pca_dim: 3_000
+  ae_dim: 1_000
+  hidden_config: [1_600, 800, 800, 800]
+  ae_nonlinearity: "gelu"
   batchnorm: False
   lambda_reconstruction: 1e0
-  lambda_state_pred: 1e-1
-  lambda_latent_pred: 1e-1
-  lambda_isometric: 1e-1
+  lambda_state_pred: 1e0
+  lambda_latent_pred: 1e0
+  lambda_isometric: 1e0
   # koopman_param: "lowrank"
-  # koopman_rank: 200
-
+  # koopman_rank: 2_000
 
 adv: 
     use_adversarial_training: False

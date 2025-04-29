@@ -6,31 +6,18 @@ import torch
 from koopmann.log import logger
 
 
-def undo_processing(input_tensor, preproc_dict, index):
+def undo_processing(input_tensor, preproc_dict, index, device):
     cloned_tensor = input_tensor.clone()
     if f"norms_{index}" in preproc_dict:
-        cloned_tensor *= preproc_dict[f"norms_{index}"]
+        cloned_tensor *= preproc_dict[f"norms_{index}"].to(device)
     if f"directions_{index}" in preproc_dict:
-        cloned_tensor = cloned_tensor @ preproc_dict[f"directions_{index}"]
+        cloned_tensor = cloned_tensor @ preproc_dict[f"directions_{index}"].to(device)
     if f"means_{index}" in preproc_dict:
-        cloned_tensor += preproc_dict[f"means_{index}"]
+        cloned_tensor += preproc_dict[f"means_{index}"].to(device)
     return cloned_tensor
 
 
-def prepare_acts(
-    data_train_loader,
-    model,
-    device,
-    new_dim,
-    whiten_alpha=1,
-    preprocess=True,
-    preprocess_dict=None,
-    only_first_last=True,
-):
-    # Hook model
-    model.eval().hook_model()
-
-    # Collect all activations
+def build_acts_dict(data_train_loader, model, only_first_last, device):
     original_act_dict = OrderedDict()
     for inputs, _ in data_train_loader:
         inputs = inputs.to(device)
@@ -45,23 +32,43 @@ def prepare_acts(
 
         if only_first_last:
             keys = list(batch_act_dict.keys())
-            for key in keys[1:-1]:
+            # NOTE: supposed to be 0, 8
+            temp = set(keys) - set([5, 6])
+            for key in temp:
                 batch_act_dict.pop(key)
 
         for key, acts in batch_act_dict.items():
-            acts_cpu = acts.cpu()  # <-- This is the key change
+            acts_cpu = acts.cpu()
             if key in original_act_dict:
                 original_act_dict[key] = torch.cat([original_act_dict[key], acts_cpu], dim=0)
             else:
                 original_act_dict[key] = acts_cpu
 
     # Clear CUDA cache to ensure GPU memory is freed
-    torch.cuda.empty_cache()  # <-- Added this line
+    torch.cuda.empty_cache()
 
     # We are using up a lot of memory.
     # Does this help out the GPU?
     del batch_act_dict
 
+    return original_act_dict
+
+
+def prepare_acts(
+    data_train_loader,
+    model,
+    device,
+    new_dim,
+    whiten_alpha=1,
+    preprocess=True,
+    preprocess_dict=None,
+    only_first_last=True,
+):
+    # Hook model
+    model.eval().hook_model().to(device)
+
+    # Collect all activations
+    original_act_dict = build_acts_dict(data_train_loader, model, only_first_last, device)
     processed_act_dict = OrderedDict()
 
     # Initialize preprocessing dict if needed
@@ -77,14 +84,14 @@ def prepare_acts(
             )
             if f"means_{key}" not in preprocess_dict:
                 preprocess_dict[f"means_{key}"] = means.contiguous()
-            processed_act -= means
+            processed_act -= means.to(device)
 
             # Dim reduce
             if f"directions_{key}" not in preprocess_dict:
-                processed_act, directions = Processor._dim_reduce(processed_act, new_dim)
+                processed_act, directions = Processor._dim_reduce_svd(processed_act, new_dim)
                 preprocess_dict[f"directions_{key}"] = directions.contiguous()
             else:
-                processed_act = processed_act @ preprocess_dict[f"directions_{key}"].T
+                processed_act = processed_act @ preprocess_dict[f"directions_{key}"].T.to(device)
 
             # Parameterized whitening
             # processed_act = Processor._whiten(processed_act, alpha=0.1)
@@ -93,11 +100,11 @@ def prepare_acts(
 
             # Normalize
             norms = preprocess_dict.get(
-                f"norms_{key}", torch.linalg.norm(processed_act, ord="fro") / 1_00
+                f"norms_{key}", torch.linalg.norm(processed_act, ord="fro") / 1_000
             )
             if f"norms_{key}" not in preprocess_dict:
                 preprocess_dict[f"norms_{key}"] = norms.contiguous()
-            processed_act /= norms
+            processed_act /= norms.to(device)
 
             processed_act_dict[key] = processed_act
 
@@ -190,7 +197,7 @@ class Processor:
         return torch.hstack([x.view(m, d), x.new_zeros(m, num_pad)])
 
     @staticmethod
-    def _dim_reduce(x, dim):
+    def _dim_reduce_svd(x, dim):
         # PCA to truncate -- project onto top p principal axes (no rescaling)
 
         # NOTE: For large matrices, standard SVD is not stable.
@@ -214,7 +221,6 @@ class Processor:
 
         # Permute
         Vh_trunc = Vh[:dim, :]
-        # Vh_trunc = Vh[:dim, :][torch.randperm(dim), :]
 
         # import numpy as np; import matplotlib.pyplot as plt; signal = (subset[0] @ Vh[:dim, :].T).cpu(); side = int(np.sqrt(signal.shape[0])); plt.figure(figsize=(8, 8)); plt.imshow(signal[:side*side].reshape(side, side)); plt.colorbar(); plt.savefig('pca_signal.png'); plt.close()
         # import numpy as np; import matplotlib.pyplot as plt; signal = (subset[0] @ Vh_permuted.T).cpu(); side = int(np.sqrt(signal.shape[0])); plt.figure(figsize=(8, 8)); plt.imshow(signal[:side*side].reshape(side, side)); plt.colorbar(); plt.savefig('pca_signal.png'); plt.close()

@@ -51,7 +51,7 @@ def get_autoencoder(config, model, device):
         "latent_features": config.autoencoder.ae_dim,
         "hidden_config": config.autoencoder.hidden_config,
         "batchnorm": config.autoencoder.batchnorm,
-        "bias": True,
+        "bias": False,
         "rank": config.autoencoder.koopman_rank,
         "nonlinearity": config.autoencoder.ae_nonlinearity,
         "use_eigeninit": False,
@@ -116,6 +116,8 @@ def eval_log_autoencoder(model, autoencoder, act_dict, device, config, epoch):
     # Log metrics
     metrics.log_metrics(epoch, "eval")
 
+    return metrics.compute()
+
 
 def train_one_epoch(model, autoencoder, act_dict, device, config, epoch, optimizer):
     # Initialize metrics tracker
@@ -128,6 +130,7 @@ def train_one_epoch(model, autoencoder, act_dict, device, config, epoch, optimiz
     batch_size = config.batch_size
     for batch_dict in iterate_by_batches(act_dict, batch_size):
         # Compute losses
+
         metrics.update(
             autoencoder=autoencoder,
             act_dict=batch_dict,
@@ -143,10 +146,10 @@ def train_one_epoch(model, autoencoder, act_dict, device, config, epoch, optimiz
 
         # Compute loss
         loss = (
-            lambda_reconstruction * metrics.batch_metrics.fvu_reconstruction
-            + lambda_state_pred * metrics.batch_metrics.fvu_state_pred
-            + lambda_latent_pred * metrics.batch_metrics.fvu_latent_pred
-            + lambda_isometric * metrics.batch_metrics.fvu_distance
+            lambda_reconstruction * metrics.batch_metrics.raw_reconstruction
+            + lambda_state_pred * metrics.batch_metrics.raw_state_pred
+            + lambda_latent_pred * metrics.batch_metrics.raw_latent_pred
+            + lambda_isometric * metrics.batch_metrics.raw_distance
             # + lambda_shaping_loss * metrics.batch_metrics.shaping_loss
         )
 
@@ -177,8 +180,9 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]] = None):
     device = get_device()
 
     # Get data
+    # `train_subset` and `shuffle` parameters for debugging
     data_train_loader, data_test_loader, train_dataset, test_dataset = get_dataloaders(
-        config=config, test_batch_size=4096, shuffle=False
+        config=config, test_batch_size=4096, shuffle=False, train_subset=5_000, test_subset=1_000
     )
 
     # Load model and create autoencoder
@@ -189,10 +193,10 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]] = None):
 
     # Setup training
     optimizer = get_optimizer(config, autoencoder)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, config.optim.num_epochs)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, 1.1 * config.optim.num_epochs)
 
     # Preprocess activations
-    orig_act_dict, act_dict, preproc_dict = prepare_acts(
+    _, train_act_dict, preproc_dict = prepare_acts(
         data_train_loader=data_train_loader,
         model=model,
         device=device,
@@ -211,7 +215,7 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]] = None):
             metrics = train_one_epoch(
                 model=model,
                 autoencoder=autoencoder,
-                act_dict=act_dict,
+                act_dict=train_act_dict,
                 device=device,
                 config=config,
                 epoch=epoch,
@@ -225,16 +229,16 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]] = None):
             eval_log_autoencoder(
                 model=model,
                 autoencoder=autoencoder,
-                act_dict=act_dict,
+                act_dict=train_act_dict,
                 device=device,
                 config=config,
                 epoch=epoch,
             )
 
-        logger.info(
-            f"Epoch {epoch + 1}/{config.optim.num_epochs}, "
-            f"Train Loss: {metrics['combined_loss']:.4f}, "
-        )
+            logger.info(
+                f"Epoch {epoch + 1}/{config.optim.num_epochs}, "
+                f"Eval FVU State Pred: {metrics['fvu_state_pred']:.4f}, "
+            )
 
     wandb.finish()
 

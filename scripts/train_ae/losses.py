@@ -244,25 +244,25 @@ def _latent_prediction_loss(act_dict, autoencoder, k) -> tuple:
     # Encode each layer’s padded activation into latent space
     latent_acts = [autoencoder.encode(act) for act in acts]
 
-    # shape: [batch, layers, latent]
-    latent_acts = torch.stack(latent_acts, dim=1)
+    # # shape: [batch, layers, latent]
+    # latent_acts = torch.stack(latent_acts, dim=1)
 
     # NOTE: Is this right? I think we should be detaching these to prevent a complicated
     # computational graph.
-    latent_acts = latent_acts.detach()
+    # latent_acts = latent_acts.detach()
 
     # Koopman step: multiply the *first* layer’s latent by K^k
     K_matrix = autoencoder.koopman_weights.T
 
     # shape: [batch, neurons]
-    embedded_act = latent_acts[:, 0, :] @ linalg.matrix_power(K_matrix, autoencoder.k_steps)
+    embedded_act = latent_acts[0] @ linalg.matrix_power(K_matrix, autoencoder.k_steps)
 
     # Square the difference, average across all dimensions
     # shape: [1]
-    latent_error = (embedded_act - latent_acts[:, -1, :]).pow(2).mean(dim=[0, 1])
+    latent_error = (embedded_act - latent_acts[-1]).pow(2).mean(dim=[0, 1])
 
     # Total variance in final layer’s latent
-    latent_last_centered_acts = latent_acts[:, -1, :] - latent_acts[:, -1, :].mean(dim=0)
+    latent_last_centered_acts = latent_acts[-1] - latent_acts[-1].mean(dim=0)
 
     # shape: [1]
     total_variance_latent_space = latent_last_centered_acts.pow(2).mean(dim=[0, 1])
@@ -279,8 +279,8 @@ def compute_isometric_loss(act_dict, autoencoder, k) -> tuple:
     target_acts = acts[-1]
 
     # Encode both starting and target states
-    encoded_starting = autoencoder.components.encoder(starting_acts)
-    encoded_target = autoencoder.components.encoder(target_acts)
+    encoded_starting = autoencoder.encode(starting_acts)
+    encoded_target = autoencoder.encode(target_acts)
 
     # Pairwise distances for starting
     start_dists = torch.cdist(starting_acts, starting_acts)

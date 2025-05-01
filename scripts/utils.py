@@ -138,7 +138,6 @@ def get_optimizer(config, model):
     return optimizer
 
 
-# Iterating function
 def iterate_by_batches(act_dict, batch_size, shuffle=True):
     keys = list(act_dict.keys())
     num_samples = act_dict[keys[0]].shape[0]

@@ -19,9 +19,17 @@ from koopmann.models import (
 from koopmann.utils import get_device
 from scripts.train_ae.losses import AutoencoderMetrics
 from scripts.train_ae.shape_metrics import prepare_acts
-from scripts.utils import get_dataloaders, get_optimizer, iterate_by_batches, setup_config
+from scripts.utils import (
+    get_dataloaders,
+    get_lr_schedule,
+    get_optimizer,
+    iterate_by_batches,
+    setup_config,
+)
 
 torch.set_printoptions(precision=4)
+
+############# UTILS #############
 
 
 def get_model(config, device):
@@ -47,11 +55,13 @@ def get_autoencoder(config, model, device):
     autoencoder_kwargs = {
         "k_steps": config.scale.num_scaled_layers,
         # "in_features": model.components[config.scale.scale_location].in_channels,
-        "in_features": config.autoencoder.pca_dim,
+        "in_features": config.autoencoder.pca_dim
+        if config.autoencoder.pca_dim
+        else model.components[config.scale.scale_location].in_channels,
         "latent_features": config.autoencoder.ae_dim,
         "hidden_config": config.autoencoder.hidden_config,
         "batchnorm": config.autoencoder.batchnorm,
-        "bias": False,
+        "bias": True,
         "rank": config.autoencoder.koopman_rank,
         "nonlinearity": config.autoencoder.ae_nonlinearity,
         "use_eigeninit": False,
@@ -91,7 +101,7 @@ def save_autoencoder(autoencoder, config, flavor, **kwargs):
     return ae_path
 
 
-########## COMPUTATION ################
+########## COMPUTATION ##########
 
 
 def eval_log_autoencoder(model, autoencoder, act_dict, device, config, epoch):
@@ -142,7 +152,6 @@ def train_one_epoch(model, autoencoder, act_dict, device, config, epoch, optimiz
         lambda_state_pred = config.autoencoder.lambda_state_pred
         lambda_latent_pred = config.autoencoder.lambda_latent_pred
         lambda_isometric = config.autoencoder.lambda_isometric
-        # lambda_shaping_loss = 1e-3
 
         # Compute loss
         loss = (
@@ -150,7 +159,6 @@ def train_one_epoch(model, autoencoder, act_dict, device, config, epoch, optimiz
             + lambda_state_pred * metrics.batch_metrics.raw_state_pred
             + lambda_latent_pred * metrics.batch_metrics.raw_latent_pred
             + lambda_isometric * metrics.batch_metrics.raw_distance
-            # + lambda_shaping_loss * metrics.batch_metrics.shaping_loss
         )
 
         # Track combined loss
@@ -182,7 +190,11 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]] = None):
     # Get data
     # `train_subset` and `shuffle` parameters for debugging
     data_train_loader, data_test_loader, train_dataset, test_dataset = get_dataloaders(
-        config=config, test_batch_size=4096, shuffle=False, train_subset=5_000, test_subset=1_000
+        config=config,
+        test_batch_size=4096,
+        shuffle=True,
+        # train_subset=5_000,
+        # test_subset=1_000,
     )
 
     # Load model and create autoencoder
@@ -193,18 +205,25 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]] = None):
 
     # Setup training
     optimizer = get_optimizer(config, autoencoder)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, 1.1 * config.optim.num_epochs)
+    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, config.optim.num_epochs)
+    scheduler = get_lr_schedule(
+        lr_schedule_type="cyclic",
+        n_epochs=config.optim.num_epochs,
+        lr_max=config.optim.learning_rate,
+        optimizer=optimizer,
+    )
 
     # Preprocess activations
-    _, train_act_dict, preproc_dict = prepare_acts(
+    train_orig_act_dict, train_proc_act_dict, preproc_dict = prepare_acts(
         data_train_loader=data_train_loader,
         model=model,
         device=device,
-        new_dim=config.autoencoder.pca_dim if config.autoencoder.pca_dim else -1,
-        whiten_alpha=1,
+        svd_dim=config.autoencoder.pca_dim,
+        whiten_alpha=config.autoencoder.whiten_alpha,
         preprocess=config.autoencoder.preprocess,
         only_first_last=True,
     )
+    train_act_dict = train_proc_act_dict if config.autoencoder.preprocess else train_orig_act_dict
 
     metrics = {}
     # Training loop

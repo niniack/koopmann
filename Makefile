@@ -28,3 +28,7 @@ test_autoencoder:
 ### 
 test_datasets:
 	poetry run pytest -s tests/test_datasets.py
+
+###
+test_preprocessing:
+	poetry run pytest -s tests/test_preprocessing.py

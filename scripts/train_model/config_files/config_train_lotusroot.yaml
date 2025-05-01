@@ -1,15 +1,15 @@
 model: 
-    residual: True
-    out_features: 2
-    hidden_neurons: [10, 10, 10, 10]
+    conv: False
+    residual: False
+    hidden_neurons: [6, 8, 10, 12]
     bias: True
     batchnorm: True
 
 optim: 
     type: "sgd"
-    weight_decay: 5e-2
-    num_epochs: 5_000
-    learning_rate: 1e-2
+    weight_decay: 5e-4
+    num_epochs: 500
+    learning_rate: 1e-1
 
 train_data: 
     dataset_name: "LotusRootDataset"
@@ -24,13 +24,16 @@ wandb:
     entity: "nishantaswani"
     project: "koopman_interp"
 
+adv: 
+    use_adversarial_training: False
+    epsilon: 0.08
+
 seed: 0
-batch_size: 1_000
-print_freq: 500
+batch_size: 512
+print_freq: 100
 task_type: "classifier"
-save_name: "lotusroot_model"
 save_dir: "/scratch/nsa325/koopmann_model_saves/"
-adversarial_training: False
+suffix: "lotusroot"
 
 
 

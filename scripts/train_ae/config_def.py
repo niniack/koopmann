@@ -54,6 +54,7 @@ class AutoencoderConfig(BaseModel):
     koopman_param: Optional[KoopmanParam] = None
     koopman_rank: Optional[int] = None
     ae_nonlinearity: Optional[str] = None
+    whiten_alpha: NonNegativeFloat
 
     @model_validator(mode="after")
     def val_koopman_rank(self) -> "AutoencoderConfig":
@@ -65,12 +66,12 @@ class AutoencoderConfig(BaseModel):
                 )
         return self
 
-    @model_validator(mode="after")
-    def val_preprocess_pca_dim(self) -> "AutoencoderConfig":
-        # Validate that pca_dim is provided when preprocess is True
-        if self.preprocess and self.pca_dim is None:
-            raise ValueError("`pca_dim` must be provided when `preprocess` is True")
-        return self
+    # @model_validator(mode="after")
+    # def val_preprocess_pca_dim(self) -> "AutoencoderConfig":
+    #     # Validate that pca_dim is provided when preprocess is True
+    #     if self.preprocess and self.pca_dim is None:
+    #         raise ValueError("`pca_dim` must be provided when `preprocess` is True")
+    #     return self
 
 
 # Main Config class

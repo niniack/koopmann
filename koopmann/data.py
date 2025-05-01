@@ -222,7 +222,7 @@ class LotusRootDataset(Dataset):
         self.rng = np.random.RandomState(config.seed)
         self.features = []
         self.labels = []
-        self.num_classes = 2
+        self.out_features = 2
 
         for _ in range(config.num_samples):
             x, y, label = self.sample_point()

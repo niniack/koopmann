@@ -6,13 +6,13 @@ import fire
 import numpy as np
 import torch
 import torchattacks
-import wandb
 from config_def import Config
 from torch import nn
 from torch.nn import Module
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 
+import wandb
 from koopmann.log import logger
 from koopmann.models import MLP, ResMLP, resnet18, resnet18_mnist
 from koopmann.utils import get_device
@@ -91,6 +91,26 @@ def compute_model_stats(model, step, log_histograms=False):
                     stats[f"weights/{name}/histogram"] = wandb.Histogram(param.data.cpu().numpy())
 
     return stats
+
+
+def evaluate_model(model, dataloader, device):
+    model.eval()
+
+    clean_correct = 0
+    total = 0
+    for inputs, labels in dataloader:
+        inputs, labels = inputs.to(device), labels.to(device).squeeze()
+        batch_size = inputs.size(0)
+        total += batch_size
+
+        with torch.no_grad():
+            outputs = model(inputs)
+            _, predicted = outputs.max(1)
+            clean_correct += predicted.eq(labels).sum().item()
+
+    return {
+        "clean_accuracy": 100 * clean_correct / total,
+    }
 
 
 def evaluate_adversarial_robustness(
@@ -355,15 +375,24 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]] = None):
             # metrics.update({"curvature": curvature})
 
             # Adv test stats
-            adv_metrics = evaluate_adversarial_robustness(
-                model=model,
-                dataloader=test_loader,
-                device=device,
-                dataset_mean=train_dataset.mean,
-                dataset_std=train_dataset.std,
-                epsilon=config.adv.epsilon,
-            )
-            metrics.update(adv_metrics)
+
+            if config.adv.use_adversarial_training:
+                eval_metrics = evaluate_adversarial_robustness(
+                    model=model,
+                    dataloader=test_loader,
+                    device=device,
+                    dataset_mean=train_dataset.mean,
+                    dataset_std=train_dataset.std,
+                    epsilon=config.adv.epsilon,
+                )
+            else:
+                eval_metrics = evaluate_model(
+                    model=model,
+                    dataloader=test_loader,
+                    device=device,
+                )
+
+            metrics.update(eval_metrics)
 
             # Print out
             logger.info(
@@ -372,7 +401,8 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]] = None):
             )
 
         # Log all epoch metrics
-        wandb.log(metrics, step=epoch)
+        if (epoch + 1) % config.print_freq // 2 == 0:
+            wandb.log(metrics, step=epoch)
 
     # Save model
     if config.save_dir:

@@ -1,0 +1,95 @@
+program: train.py
+name: koopman_interp_sweep
+method: grid
+metric:
+  goal: minimize
+  name: train/combined_loss
+entity: nishantaswani
+project: koopman_interp
+num_sweeps: 500
+parameters:
+  batch_size:
+    value: 512
+  optim:
+    parameters:
+      learning_rate:
+        value: 5e-3
+      weight_decay:
+        value: 5e-4
+      # Not sweepable below
+      num_epochs:
+        value: 100
+      type:
+        value: adamw
+  autoencoder:
+    parameters:
+      pca_dim:
+        values: [500, 1_000, 3_000]
+      hidden_config:
+        values: [[1_000], [800, 1_000]]
+      ae_dim:
+        values: [1_000, 3_000]
+      ae_nonlinearity:
+        value: leaky_relu
+      preprocess:
+        value: true
+      # Not sweepable below
+      lambda_reconstruction:
+        value: 1e0
+      lambda_state_pred:
+        value: 1e0
+      lambda_latent_pred:
+        value: 1e0
+      lambda_isometric:
+        values: [1e-3, 1e-2]
+      batchnorm:
+        value: false
+      koopman_param: 
+        value: "exponential"
+      whiten_alpha:
+        value: 1.0
+
+  ### Dead zone
+  ### Not sweepable
+  task_type:
+    value: autoencoder
+  save_name:
+    value: cifar10_model
+  save_dir:
+    value: /scratch/nsa325/koopmann_model_saves/
+  print_freq:
+    value: 20
+  seed:
+    value: 21
+  train_data:
+    parameters:
+      dataset_name:
+        value: CIFAR10Dataset
+      num_samples:
+        value: 50_000
+      split:
+        value: train
+      torch_transform:
+        value: null
+      seed:
+        value: 42
+      negative_label:
+        value: false
+  scale:
+    parameters:
+      model_to_scale:
+        value: /scratch/nsa325/koopmann_model_saves/convresnet_cifar10.safetensors
+      scale_location:
+        value: 1
+      num_scaled_layers:
+        value: 10
+  adv:
+    parameters:
+      use_adversarial_training:
+        value: false
+      epsilon:
+        value: 0.08
+  wandb:
+    parameters:
+      use_wandb:
+        value: true

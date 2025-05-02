@@ -26,7 +26,7 @@ parameters:
       pca_dim:
         values: [500, 784]
       ae_dim:
-        value: [800, 1_000]
+        values: [800, 1_000]
       hidden_config:
         values: [[500],[500, 1_000], [800, 1_000]]
       ae_nonlinearity:
@@ -47,7 +47,7 @@ parameters:
       koopman_param: 
         value: "exponential"
       whiten_alpha:
-        values: [0.1, 0.5, 1.0]
+        value: 1.0
 
   ### Dead zone
   ### Not sweepable

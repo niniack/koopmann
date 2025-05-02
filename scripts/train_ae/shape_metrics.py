@@ -120,10 +120,10 @@ def preprocess_acts(
                 processed_act, alpha=whiten_alpha
             )
             preprocess_dict[wh_eigvals_key] = (
-                wh_eigvals.contiguous() if is_tensor(wh_eigvals) else None
+                wh_eigvals.contiguous() if is_tensor(wh_eigvals) else torch.empty(1)
             )
             preprocess_dict[wh_eigvecs_key] = (
-                wh_eigvecs.contiguous() if is_tensor(wh_eigvals) else None
+                wh_eigvecs.contiguous() if is_tensor(wh_eigvals) else torch.empty(1)
             )
             preprocess_dict[wh_alpha_key] = torch.tensor(whiten_alpha)
         else:

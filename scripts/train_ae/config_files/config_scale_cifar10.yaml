@@ -7,15 +7,15 @@ train_data:
   negative_label: False
 
 optim:
-  num_epochs: 1_00
-  learning_rate: 1e-3
-  weight_decay: 1e-1
+  num_epochs: 200
+  learning_rate: 5e-3
+  weight_decay: 5e-2
   type: "adamw"
 
 scale:
   model_to_scale: "/scratch/nsa325/koopmann_model_saves/convresnet_cifar10.safetensors"
   scale_location: 1
-  num_scaled_layers: 1
+  num_scaled_layers: 10
 
 wandb: 
     use_wandb: True
@@ -24,17 +24,17 @@ wandb:
 
 autoencoder:
   preprocess: True
-  pca_dim: 3_000
+  pca_dim: 2_000
   ae_dim: 1_000
-  hidden_config: [1_600, 800, 800, 800]
-  ae_nonlinearity: "gelu"
+  hidden_config: [1_500, 1_000]
+  ae_nonlinearity: "leaky_relu"
   batchnorm: False
   lambda_reconstruction: 1e0
   lambda_state_pred: 1e0
   lambda_latent_pred: 1e0
-  lambda_isometric: 1e0
-  # koopman_param: "lowrank"
-  # koopman_rank: 2_000
+  lambda_isometric: 1e-3
+  koopman_param: "exponential"
+  whiten_alpha: 1
 
 adv: 
     use_adversarial_training: False

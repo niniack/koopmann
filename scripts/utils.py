@@ -49,7 +49,7 @@ def compute_curvature(model, dataloader, device):
 
 def get_lr_schedule(lr_schedule_type: Literal["cyclic", "piecewise"], n_epochs, lr_max, optimizer):
     if lr_schedule_type == "cyclic":
-        step_size_up = int(n_epochs * 2 / 5)
+        step_size_up = int(n_epochs * 1 / 5)
         step_size_down = n_epochs - step_size_up
         scheduler = CyclicLR(
             optimizer,

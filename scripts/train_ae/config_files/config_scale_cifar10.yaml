@@ -7,15 +7,15 @@ train_data:
   negative_label: False
 
 optim:
-  num_epochs: 200
-  learning_rate: 5e-3
-  weight_decay: 5e-2
+  num_epochs: 1_00
+  learning_rate: 1e-2
+  weight_decay: 5e-4
   type: "adamw"
 
 scale:
   model_to_scale: "/scratch/nsa325/koopmann_model_saves/convresnet_cifar10.safetensors"
   scale_location: 1
-  num_scaled_layers: 10
+  num_scaled_layers: 500
 
 wandb: 
     use_wandb: True
@@ -24,15 +24,15 @@ wandb:
 
 autoencoder:
   preprocess: True
-  pca_dim: 2_000
+  pca_dim: 500
   ae_dim: 1_000
-  hidden_config: [1_500, 1_000]
+  hidden_config: [800, 1_000]
   ae_nonlinearity: "leaky_relu"
   batchnorm: False
   lambda_reconstruction: 1e0
   lambda_state_pred: 1e0
   lambda_latent_pred: 1e0
-  lambda_isometric: 1e-3
+  lambda_isometric: 1e-4
   koopman_param: "exponential"
   whiten_alpha: 1
 
@@ -41,7 +41,7 @@ adv:
     epsilon: 0.08
 
 task_type: "autoencoder"
-batch_size: 1_024
+batch_size: 256
 seed: 21
 save_name: "cifar10_model"
 save_dir: "/scratch/nsa325/koopmann_model_saves/"

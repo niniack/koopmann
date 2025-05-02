@@ -101,6 +101,27 @@ def save_autoencoder(autoencoder, config, flavor, **kwargs):
     return ae_path
 
 
+def check_gradient_norms(model, optimizer, losses):
+    grad_norms = {}
+
+    for loss_name, loss_component in losses.items():
+        # Clear previous gradients
+        optimizer.zero_grad()
+
+        # Backward pass for just this component
+        loss_component.backward(retain_graph=True)
+
+        # Calculate gradient norm
+        total_norm = (
+            sum(p.grad.data.norm(2).item() ** 2 for p in model.parameters() if p.grad is not None)
+            ** 0.5
+        )
+
+        grad_norms[loss_name] = total_norm
+
+    return grad_norms
+
+
 ########## COMPUTATION ##########
 
 
@@ -138,6 +159,7 @@ def train_one_epoch(model, autoencoder, act_dict, device, config, epoch, optimiz
     autoencoder.to(device).train()
 
     batch_size = config.batch_size
+    global_step = epoch * (len(act_dict[0]) // batch_size)
     for batch_dict in iterate_by_batches(act_dict, batch_size):
         # Compute losses
 
@@ -153,21 +175,28 @@ def train_one_epoch(model, autoencoder, act_dict, device, config, epoch, optimiz
         lambda_latent_pred = config.autoencoder.lambda_latent_pred
         lambda_isometric = config.autoencoder.lambda_isometric
 
-        # Compute loss
-        loss = (
-            lambda_reconstruction * metrics.batch_metrics.raw_reconstruction
-            + lambda_state_pred * metrics.batch_metrics.raw_state_pred
-            + lambda_latent_pred * metrics.batch_metrics.raw_latent_pred
-            + lambda_isometric * metrics.batch_metrics.raw_distance
-        )
+        losses = {
+            "reconstruction": lambda_reconstruction * metrics.batch_metrics.raw_reconstruction,
+            "state_pred": lambda_state_pred * metrics.batch_metrics.raw_state_pred,
+            "latent_pred": lambda_latent_pred * metrics.batch_metrics.raw_latent_pred,
+            "isometric": lambda_isometric * metrics.batch_metrics.raw_distance,
+        }
 
-        # Track combined loss
+        # Track the combined loss as before
+        loss = sum(losses.values())
         metrics.set_weighted_loss(loss)
-        optimizer.zero_grad()
+
+        # Diagnose gradients (only occasionally to avoid slowing training)
+        if global_step % 100 == 0:
+            grad_norms = check_gradient_norms(autoencoder, optimizer, losses)
+            wandb.log(grad_norms, step=global_step)
 
         # Backward pass
+        optimizer.zero_grad()
         loss.backward()
+        # torch.nn.utils.clip_grad_norm_(autoencoder.parameters(), max_norm=0.1)
         optimizer.step()
+        global_step += 1
 
     # Calculate averages
     avg_metrics = metrics.compute()
@@ -193,7 +222,7 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]] = None):
         config=config,
         test_batch_size=4096,
         shuffle=True,
-        # train_subset=5_000,
+        # train_subset=500,
         # test_subset=1_000,
     )
 

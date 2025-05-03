@@ -8,9 +8,14 @@ package-mode = true
 
 [tool.poetry.dependencies]
 python = ">=3.10,<3.13"
-torch = { version = "2.1.0", source = "pytorch" }
-torchvision = { version = "*", source = "pytorch" }
-ipykernel = "^6.29.5"
+torch = [
+    { version = "2.1.0", markers = "sys_platform == 'darwin'" },
+    # { version = "2.1.0+cu121", source = "pytorch_cuda", markers = "sys_platform == 'linux'" }
+]
+torchvision = [
+    { version = "*", platform="darwin"},
+    # { version = "*", source = "pytorch_cuda", markers = "sys_platform == 'linux'" }
+]
 fire = "^0.7.0"
 safetensors = "^0.4.5"
 rich = "^13.9.3"
@@ -44,10 +49,16 @@ panel = "^1.6.2"
 torchattacks = "^3.5.1"
 hessian-eigenthings = {git = "https://github.com/noahgolmant/pytorch-hessian-eigenthings.git", rev = "master"}
 torchviz = "^0.0.3"
+ipykernel = "^6.29.5"
 
 [[tool.poetry.source]]
-name = "pytorch"
-url = "https://download.pytorch.org/whl/cu121"
+name = "pytorch_cpu"
+url = "https://download.pytorch.org/whl/cpu"
+priority = "explicit"
+
+[[tool.poetry.source]]
+name = "pytorch_cuda"
+url = "https://download.pytorch.org/whl/cu121" 
 priority = "explicit"
 
 [tool.poetry.group.test.dependencies]  

@@ -208,11 +208,7 @@ class YinYangBinaryDataset(BaseYinYangDataset):
 
 class LotusRootDataset(Dataset):
     def __init__(
-        self,
-        config: DatasetConfig,
-        r_inner=0.35,
-        r_outer=1,
-        num_small_circles=9,
+        self, config: DatasetConfig, r_inner=0.35, r_outer=1, num_small_circles=9, root=None
     ):
         super().__init__()
         self.num_samples = config.num_samples

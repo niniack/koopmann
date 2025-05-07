@@ -19,6 +19,7 @@ class AutoencoderMetrics:
             "state_pred": compute_state_prediction_loss,
             "latent_pred": compute_latent_prediction_loss,
             "distance": compute_isometric_loss,
+            "sparsity": compute_eigenspace_loss,
         }
         self.device = device
         self.reset()
@@ -251,11 +252,8 @@ def _latent_prediction_loss(act_dict, autoencoder, k) -> tuple:
     # computational graph.
     # latent_acts = latent_acts.detach()
 
-    # Koopman step: multiply the *first* layer’s latent by K^k
-    K_matrix = autoencoder.koopman_weights.T
-
     # shape: [batch, neurons]
-    embedded_act = latent_acts[0] @ linalg.matrix_power(K_matrix, autoencoder.k_steps)
+    embedded_act = autoencoder.koopman_forward(latent_acts[0], autoencoder.k_steps)
 
     # Square the difference, average across all dimensions
     # shape: [1]
@@ -310,48 +308,75 @@ def compute_isometric_loss(act_dict, autoencoder, k) -> tuple:
 
 
 ########################## Shaping Loss ##########################
-def compute_eigenvector_shaping_loss(act_dict, autoencoder, labels) -> torch.Tensor:
-    act_list = list(act_dict.values())
-    initial_acts = act_list[0]
-    final_acts = act_list[-1]
+# def compute_eigenvector_shaping_loss(act_dict, autoencoder, labels) -> torch.Tensor:
+#     act_list = list(act_dict.values())
+#     initial_acts = act_list[0]
+#     final_acts = act_list[-1]
 
-    # Get class representatives
-    unique_labels = torch.unique(labels)
-    first_indices = torch.tensor([torch.where(labels == lbl)[0][0].item() for lbl in unique_labels])
+#     # Get class representatives
+#     unique_labels = torch.unique(labels)
+#     first_indices = torch.tensor([torch.where(labels == lbl)[0][0].item() for lbl in unique_labels])
 
-    # Encode and normalize
-    target_right_directions = autoencoder.encode(initial_acts[first_indices]).detach()
-    target_right_directions = target_right_directions / torch.norm(
-        target_right_directions, dim=1, keepdim=True
+#     # Encode and normalize
+#     target_right_directions = autoencoder.encode(initial_acts[first_indices]).detach()
+#     target_right_directions = target_right_directions / torch.norm(
+#         target_right_directions, dim=1, keepdim=True
+#     )
+
+#     target_left_directions = autoencoder.encode(final_acts[first_indices]).detach()
+#     target_left_directions = target_left_directions / torch.norm(
+#         target_left_directions, dim=1, keepdim=True
+#     )
+
+#     # Koopman matrix
+#     K_matrix = autoencoder.koopman_weights.T
+
+#     # Calculate cosine similarity between t^T K and t^T
+#     loss = 0.0
+#     for right, left in zip(target_right_directions, target_left_directions):
+#         # Apply Koopman matrix: t^T @ K
+#         left_transformed = left @ K_matrix
+
+#         # K @ t
+#         right_transformed = K_matrix @ right
+
+#         # Normalize transformed vector for cosine similarity
+#         left_transformed_norm = left_transformed / (torch.norm(left_transformed) + 1e-8)
+#         right_transformed_norm = right_transformed / (torch.norm(right_transformed) + 1e-8)
+
+#         # Loss: 1 - cos_sim (perfect alignment gives 0 loss)
+#         left_residual = 1 - torch.abs(torch.dot(left_transformed_norm, left))
+#         right_residual = 1 - torch.abs(torch.dot(right_transformed_norm, right))
+
+#         loss += left_residual
+#     return loss
+
+
+def compute_eigenspace_loss(act_dict, autoencoder, k) -> tuple:
+    # eye = torch.eye(V.shape[0], device=V.device)
+    # V_inv = torch.linalg.solve(V, eye)
+
+    acts = list(act_dict.values())
+    starting_acts = acts[0]
+    phi_x = autoencoder.encode(starting_acts)
+    Vt_phi_X = autoencoder.koopman_eigenspace(phi_x)
+
+    # L1 sparsity - average across both batch and features
+    sparsity_raw = torch.mean(torch.abs(Vt_phi_X))
+
+    # For an FVU-like metric (0-1 range, lower is better)
+    # Use the ratio of L1 to L2 norms, normalized
+    l1_norm = torch.sum(torch.abs(Vt_phi_X), dim=1)  # Sum abs values per example
+    l2_norm = torch.norm(Vt_phi_X, p=2, dim=1)  # Euclidean norm per example
+    n_dims = Vt_phi_X.shape[1]
+
+    # This gives a measure of "effective sparsity" - closer to 1 for dense, closer to 0 for sparse
+    sparsity_ratio = l1_norm / (
+        l2_norm * torch.sqrt(torch.tensor(n_dims, dtype=torch.float, device=Vt_phi_X.device))
     )
+    sparsity_fvu = torch.mean(sparsity_ratio)
 
-    target_left_directions = autoencoder.encode(final_acts[first_indices]).detach()
-    target_left_directions = target_left_directions / torch.norm(
-        target_left_directions, dim=1, keepdim=True
-    )
-
-    # Koopman matrix
-    K_matrix = autoencoder.koopman_weights.T
-
-    # Calculate cosine similarity between t^T K and t^T
-    loss = 0.0
-    for right, left in zip(target_right_directions, target_left_directions):
-        # Apply Koopman matrix: t^T @ K
-        left_transformed = left @ K_matrix
-
-        # K @ t
-        right_transformed = K_matrix @ right
-
-        # Normalize transformed vector for cosine similarity
-        left_transformed_norm = left_transformed / (torch.norm(left_transformed) + 1e-8)
-        right_transformed_norm = right_transformed / (torch.norm(right_transformed) + 1e-8)
-
-        # Loss: 1 - cos_sim (perfect alignment gives 0 loss)
-        left_residual = 1 - torch.abs(torch.dot(left_transformed_norm, left))
-        right_residual = 1 - torch.abs(torch.dot(right_transformed_norm, right))
-
-        loss += left_residual
-    return loss
+    return sparsity_raw, sparsity_fvu
 
 
 ########################## Nuclear Norm Loss ##########################

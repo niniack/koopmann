@@ -56,6 +56,7 @@ class BaseYinYangDataset(Dataset):
         r_small: float = 0.1,
         r_big: float = 0.5,
         rotate: bool = False,
+        root=None,
     ):
         super().__init__()
         # using a numpy RNG to allow compatibility to other deep learning frameworks
@@ -157,14 +158,12 @@ class YinYangDataset(BaseYinYangDataset):
     3-way YinYang classification (yin, yang, dots)
     """
 
-    def __init__(self, config: DatasetConfig, r_small=0.1, r_big=0.5):
+    def __init__(self, config: DatasetConfig, r_small=0.1, r_big=0.5, root=None):
         super().__init__(
-            config=config,
-            binary=False,
-            dots=True,
-            r_small=r_small,
-            r_big=r_big,
+            config=config, binary=False, dots=True, r_small=r_small, r_big=r_big, root=None
         )
+        self.out_features = 3
+        self.in_features = 2
 
     def name(self):
         return "YinYangDataset"
@@ -271,7 +270,7 @@ class LotusRootDataset(Dataset):
 
 
 class TorusDataset(Dataset):
-    def __init__(self, config, R=1.0, r=0.3, num_pairs=2):
+    def __init__(self, config, R=1.0, r=0.3, num_pairs=5, root=None):
         super().__init__()
         self.num_samples = config.num_samples
         self.R = R  # Major radius (distance from the center of the tube to the center of the torus)
@@ -281,6 +280,7 @@ class TorusDataset(Dataset):
         self.features = []
         self.labels = []
         self.in_features = 3
+        self.out_features = 2
 
         # Split samples evenly among all toruses
         num_samples_per_torus = self.num_samples // (2 * self.num_pairs)

@@ -5,6 +5,7 @@ import torch
 from torch import is_tensor
 
 from koopmann.log import logger
+from tqdm import tqdm
 
 
 def build_acts_dict(data_train_loader, model, only_first_last, device):
@@ -91,7 +92,7 @@ def preprocess_acts(
     # Init empty dict
     processed_act_dict = OrderedDict()
 
-    for key, curr_act in original_act_dict.items():
+    for key, curr_act in tqdm(original_act_dict.items(), desc="Processing activations"):
         ### FLATTEN
         processed_act = torch.flatten(curr_act.clone().to(device), start_dim=1)
 
@@ -149,7 +150,15 @@ def preprocess_acts(
     anchor_act = processed_act_dict[align_idx]
     for key, curr_act in processed_act_dict.items():
         if key != align_idx:
-            _, aligned_act = Processor._orthogonal_procrustes(anchor_act, curr_act, anchor="a")
+            align_key = f"align_{key}"
+            if align_key not in preprocess_dict:
+                _, aligned_act, _, rot_matrix = Processor._orthogonal_procrustes(
+                    anchor_act, curr_act, anchor="a"
+                )
+                preprocess_dict[align_key] = rot_matrix
+            else:
+                rot_matrix = preprocess_dict[align_key]
+                aligned_act = curr_act @ rot_matrix
             processed_act_dict[key] = aligned_act
 
     return processed_act_dict
@@ -322,7 +331,13 @@ class Processor:
             differences
         """
         r_a, r_b = Processor._orthogonal_procrustes_rotation(a, b, anchor)
-        return a @ r_a if r_a is not None else a, b @ r_b if r_b is not None else b
+        # Apply rotation to a if needed
+        if r_a is not None:
+            a = a @ r_a
+        # Apply rotation to b if needed
+        if r_b is not None:
+            b = b @ r_b
+        return a, b, r_a, r_b
 
     @staticmethod
     def _orthogonal_procrustes_rotation(a, b, anchor="middle"):

@@ -9,10 +9,10 @@ optim:
     type: "sgd"
     weight_decay: 5e-4
     num_epochs: 2_000
-    learning_rate: 1e-1
+    learning_rate: 1e-2
 
 train_data: 
-    dataset_name: "LotusRootDataset"
+    dataset_name: "YinYangDataset"
     num_samples: 5_000
     split: "train"
     torch_transform: null
@@ -33,7 +33,7 @@ batch_size: 512
 print_freq: 100
 task_type: "classifier"
 save_dir: "/Users/nsa325/koopmann_model_saves/"
-suffix: "lotusroot"
+suffix: "yinyang"
 
 
 

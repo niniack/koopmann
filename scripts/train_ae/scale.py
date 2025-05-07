@@ -180,16 +180,17 @@ def train_one_epoch(model, autoencoder, act_dict, device, config, epoch, optimiz
             "state_pred": lambda_state_pred * metrics.batch_metrics.raw_state_pred,
             "latent_pred": lambda_latent_pred * metrics.batch_metrics.raw_latent_pred,
             "isometric": lambda_isometric * metrics.batch_metrics.raw_distance,
+            "sparsity": 0 * metrics.batch_metrics.raw_sparsity,
         }
 
         # Track the combined loss as before
         loss = sum(losses.values())
         metrics.set_weighted_loss(loss)
 
-        # Diagnose gradients (only occasionally to avoid slowing training)
-        if global_step % 100 == 0:
-            grad_norms = check_gradient_norms(autoencoder, optimizer, losses)
-            wandb.log(grad_norms, step=global_step)
+        # # Diagnose gradients (only occasionally to avoid slowing training)
+        # if global_step % 100 == 0:
+        #     grad_norms = check_gradient_norms(autoencoder, optimizer, losses)
+        #     wandb.log(grad_norms, step=global_step)
 
         # Backward pass
         optimizer.zero_grad()
@@ -222,7 +223,7 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]] = None):
         config=config,
         test_batch_size=4096,
         shuffle=True,
-        # train_subset=500,
+        # train_subset=5_000,
         # test_subset=1_000,
     )
 
@@ -286,6 +287,7 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]] = None):
             logger.info(
                 f"Epoch {epoch + 1}/{config.optim.num_epochs}, "
                 f"Eval FVU State Pred: {metrics['fvu_state_pred']:.4f}, "
+                f"Raw Sparsity: {metrics['raw_sparsity']:.4f}, "
             )
 
     wandb.finish()

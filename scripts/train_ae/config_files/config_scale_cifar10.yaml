@@ -13,9 +13,9 @@ optim:
   type: "adamw"
 
 scale:
-  model_to_scale: "/scratch/nsa325/koopmann_model_saves/convresnet_cifar10.safetensors"
+  model_to_scale: "/Users/nsa325/koopmann_model_saves/convresnet_cifar10.safetensors"
   scale_location: 1
-  num_scaled_layers: 500
+  num_scaled_layers: 5000
 
 wandb: 
     use_wandb: True
@@ -34,15 +34,15 @@ autoencoder:
   lambda_latent_pred: 1e0
   lambda_isometric: 1e-4
   koopman_param: "exponential"
-  whiten_alpha: 1
+  whiten_alpha: 1.0
 
 adv: 
     use_adversarial_training: False
     epsilon: 0.08
 
 task_type: "autoencoder"
-batch_size: 256
+batch_size: 2048
 seed: 21
 save_name: "cifar10_model"
-save_dir: "/scratch/nsa325/koopmann_model_saves/"
+save_dir: "/Users/nsa325/koopmann_model_saves/"
 print_freq: 5

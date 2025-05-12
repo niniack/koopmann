@@ -34,6 +34,7 @@ class DatasetConfig(BaseModel):
     torch_transform: Callable | None = None
     seed: int | None = 42
     negative_label: bool = False
+    root: str = "/scratch/nsa325/datasets/"
 
 
 def get_dataset_class(name: str) -> Dataset:

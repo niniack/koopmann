@@ -13,7 +13,7 @@ optim:
   type: "adamw"
 
 scale:
-  model_to_scale: "/Users/nsa325/koopmann_model_saves/resmlp_yinyang.safetensors"
+  model_to_scale: "/Users/nsa325/koopmann_model_saves/resmlp5_yinyang.safetensors"
   scale_location: 1
   num_scaled_layers: 100
 
@@ -32,7 +32,7 @@ autoencoder:
   lambda_reconstruction: 1e0
   lambda_state_pred: 1e0
   lambda_latent_pred: 1e0
-  lambda_isometric: 1e0
+  lambda_isometric: 0
   koopman_param: "exponential"
   # koopman_rank: 20
   whiten_alpha: 1
@@ -45,5 +45,5 @@ task_type: "autoencoder"
 batch_size: 1_024
 seed: 21
 save_name: "yinyang_model"
-save_dir: "/Users/nsa325/koopmann_model_saves/"
+save_dir: "/Users/nsa325/koopmann_model_saves/isometry_study"
 print_freq: 10

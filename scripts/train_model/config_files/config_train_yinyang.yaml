@@ -1,7 +1,7 @@
 model: 
     conv: False
     residual: True
-    hidden_neurons: [10, 10, 10, 10, 10, 10, 10, 10]
+    hidden_neurons: [10, 10, 10, 10, 10]
     bias: True
     batchnorm: True
 
@@ -18,6 +18,7 @@ train_data:
     torch_transform: null
     seed: 42
     negative_label: False
+    root: "/Users/nsa325/datasets"
 
 wandb: 
     use_wandb: True

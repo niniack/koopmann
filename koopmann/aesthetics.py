@@ -43,6 +43,25 @@ def set_equal_aspect(ax=None):
     ax.set_aspect("equal")
 
 
+def kill_ticks(ax):
+    ax.set_xticklabels([])
+    ax.set_yticklabels([])
+    if hasattr(ax, "set_zticklabels"):
+        ax.set_zticklabels([])
+    ax.set_xticks([])
+    ax.set_yticks([])
+    if hasattr(ax, "set_zticks"):
+        ax.set_zticks([])
+
+
+def kill_axes(ax, pane=True, edge=True, line=True):
+    # Make panes transparent
+    for axis in [ax.xaxis, ax.yaxis, ax.zaxis]:
+        axis.pane.fill = False if pane else True
+        axis.pane.set_edgecolor("none" if edge else "lightgray")
+        axis.line.set_color("none" if line else "black")
+
+
 # # Apply equal aspect ratio to all plots by default
 # plt.axis("equal")
 

@@ -16,9 +16,9 @@ from koopmann.models import (
     KoopmanAutoencoder,
     LowRankKoopmanAutoencoder,
 )
+from koopmann.shape_metrics import prepare_acts
 from koopmann.utils import get_device
 from scripts.train_ae.losses import AutoencoderMetrics
-from scripts.train_ae.shape_metrics import prepare_acts
 from scripts.utils import (
     get_dataloaders,
     get_lr_schedule,

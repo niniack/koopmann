@@ -67,7 +67,6 @@ def get_lr_schedule(lr_schedule_type: Literal["cyclic", "piecewise"], n_epochs, 
 
 def get_dataloaders(
     config,
-    data_root,
     train_batch_size=None,
     test_batch_size=None,
     shuffle=True,
@@ -77,7 +76,7 @@ def get_dataloaders(
     # Train data
     train_size = train_batch_size if train_batch_size else config.batch_size
     DatasetClass = get_dataset_class(name=config.train_data.dataset_name)
-    train_dataset = DatasetClass(config=config.train_data, root=data_root)
+    train_dataset = DatasetClass(config=config.train_data, root=config.train_data.root)
 
     if train_subset:
         subset_indices = list(range(0, train_subset))
@@ -97,7 +96,7 @@ def get_dataloaders(
     test_size = test_batch_size if test_batch_size else config.batch_size
     original_split = config.train_data.split
     config.train_data.split = "test"
-    test_dataset = DatasetClass(config=config.train_data, root=data_root)
+    test_dataset = DatasetClass(config=config.train_data, root=config.train_data.root)
     config.train_data.split = original_split
 
     if test_subset:

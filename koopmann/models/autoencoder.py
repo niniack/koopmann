@@ -11,6 +11,7 @@ from typing import Any, Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.utils.parametrize as parametrize
 from deprecated import deprecated
 
 from koopmann.models.base import BaseTorchModel
@@ -76,7 +77,7 @@ class Autoencoder(BaseTorchModel):
                 in_channels=channel_dims[i][0],
                 out_channels=channel_dims[i][1],
                 bias=self.bias,
-                batchnorm=self.batchnorm,
+                batchnorm=self.batchnorm if (i != len(channel_dims) - 1) else None,
                 nonlinearity=self.nonlinearity if (i != len(channel_dims) - 1) else None,
                 # nonlinearity=self.nonlinearity,
             )
@@ -97,7 +98,7 @@ class Autoencoder(BaseTorchModel):
                 in_channels=channel_dims[i][1],
                 out_channels=channel_dims[i][0],
                 bias=self.bias,
-                batchnorm=self.batchnorm,
+                batchnorm=self.batchnorm if (i != 0) else None,
                 nonlinearity=self.nonlinearity if (i != 0) else None,
             )
 
@@ -237,6 +238,76 @@ class KoopmanAutoencoder(Autoencoder):
 
 
 ### EXPONENTIAL PARAM KOOPMAN AUTOENCODER
+# class ExponentialKoopmanAutencoder(KoopmanAutoencoder):
+#     """Koopman autoencoder model with exp parameterization."""
+
+#     def __init__(
+#         self,
+#         k_steps: int,
+#         in_features: int = 2,
+#         latent_features: int = 4,
+#         hidden_config: Optional[list[int]] = None,
+#         bias: bool = True,
+#         batchnorm: bool = False,
+#         nonlinearity: str = "leaky_relu",
+#         use_eigeninit: Optional[bool] = False,
+#         **kwargs,
+#     ):
+#         super().__init__(
+#             k_steps,
+#             in_features,
+#             latent_features,
+#             hidden_config,
+#             bias,
+#             batchnorm,
+#             nonlinearity,
+#             use_eigeninit,
+#         )
+
+#         # NOTE: Weird convention
+#         # K is (weirdly) parameterized as V^-1 @ D @ V
+#         # Following convention, we apply x @ K.T
+#         # K.T = V.T @ D @ V^-1.T
+#         # The benefit of this is that entering the eignespace does not require computing an inverse.
+#         self._V = nn.Linear(latent_features, latent_features, bias=False)
+#         nn.init.xavier_normal_(self._V.weight)
+#         self._D = nn.Parameter(torch.ones(latent_features))
+
+#         class Lambda(nn.Module):
+#             def __init__(self, func):
+#                 super().__init__()
+#                 self.func = func
+
+#             def forward(self, x):
+#                 return self.func(x)
+
+#         self.components.koopman_matrix = nn.Sequential(Lambda(lambda x: x @ self.koopman_weights.T))
+
+#     @property
+#     def V(self):
+#         return self._V.weight
+
+#     @property
+#     def V_inv(self):
+#         eye = torch.eye(self.V.shape[0], device=self.V.device)
+#         return torch.linalg.solve(self.V, eye)
+#         # return torch.linalg.lstsq(self.V, eye).solution
+
+#     @property
+#     def D_exp(self):
+#         return torch.matrix_exp(torch.diag(self._D) / self.k_steps)
+
+#     @property
+#     def koopman_weights(self):
+#         return self.V_inv @ self.D_exp @ self.V
+
+#     def koopman_forward(self, observable, k_steps):
+#         return observable @ self.V.T @ torch.linalg.matrix_power(self.D_exp, k_steps) @ self.V_inv.T
+
+#     def koopman_eigenspace(self, observable):
+#         return observable @ self.V.T
+
+
 class ExponentialKoopmanAutencoder(KoopmanAutoencoder):
     """Koopman autoencoder model with exp parameterization."""
 
@@ -263,47 +334,24 @@ class ExponentialKoopmanAutencoder(KoopmanAutoencoder):
             use_eigeninit,
         )
 
-        # NOTE: Weird convention
-        # K is (weirdly) parameterized as V^-1 @ D @ V
-        # Following convention, we apply x @ K.T
-        # K.T = V.T @ D @ V^-1.T
-        # The benefit of this is that entering the eignespace does not require computing an inverse.
-        self._V = nn.Linear(latent_features, latent_features, bias=False)
-        nn.init.xavier_normal_(self._V.weight)
-        self._D = nn.Parameter(torch.ones(latent_features))
+        parametrize.register_parametrization(
+            self.components.koopman_matrix.components.linear,
+            "weight",
+            MatrixExponential(
+                k_steps=k_steps,
+                latent_features=latent_features,
+            ),
+        )
 
-        class Lambda(nn.Module):
-            def __init__(self, func):
-                super().__init__()
-                self.func = func
 
-            def forward(self, x):
-                return self.func(x)
+class MatrixExponential(nn.Module):
+    def __init__(self, k_steps, latent_features):
+        super().__init__()
+        self.k_steps = k_steps  # Number of steps
+        self.latent_features = latent_features
 
-        self.components.koopman_matrix = nn.Sequential(Lambda(lambda x: x @ self.koopman_weights.T))
-
-    @property
-    def V(self):
-        return self._V.weight
-
-    @property
-    def V_inv(self):
-        eye = torch.eye(self.V.shape[0], device=self.V.device)
-        return torch.linalg.solve(self.V, eye)
-
-    @property
-    def D_exp(self):
-        return torch.matrix_exp(torch.diag(self._D) / self.k_steps)
-
-    @property
-    def koopman_weights(self):
-        return self.V_inv @ self.D_exp @ self.V
-
-    def koopman_forward(self, observable, k_steps):
-        return observable @ self.V.T @ torch.linalg.matrix_power(self.D_exp, k_steps) @ self.V_inv.T
-
-    def koopman_eigenspace(self, observable):
-        return observable @ self.V.T
+    def forward(self, X):
+        return torch.matrix_exp(X / self.k_steps)  # Scale M by 1/k
 
 
 @deprecated(

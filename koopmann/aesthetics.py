@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import matrepr
 import pyfonts
 import seaborn as sns
+from matplotlib import font_manager
 
 # Set the aesthetic parameters in one step using Seaborn
 sns.set_theme(style="white", context="paper")
@@ -16,6 +17,7 @@ sns.axes_style("darkgrid")
 ibmplexsans = pyfonts.load_font(
     font_url="https://github.com/google/fonts/blob/057514444ab92c5819ae66fc91d42ad176a37728/ofl/ibmplexsans/IBMPlexSans-Medium.ttf?raw=true"
 )
+font_manager.fontManager.addfont(ibmplexsans.get_file())
 
 
 # Get Seaborn's tab colors

@@ -3,8 +3,6 @@ from collections import OrderedDict
 
 import torch
 from torch import is_tensor
-
-from koopmann.log import logger
 from tqdm import tqdm
 
 

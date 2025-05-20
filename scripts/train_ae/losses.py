@@ -3,7 +3,6 @@ from collections import OrderedDict
 
 import torch
 import torch.nn.functional as F
-from torch import linalg
 
 import wandb
 from scripts.utils import DotDict
@@ -19,7 +18,6 @@ class AutoencoderMetrics:
             "state_pred": compute_state_prediction_loss,
             "latent_pred": compute_latent_prediction_loss,
             "distance": compute_isometric_loss,
-            "sparsity": compute_eigenspace_loss,
         }
         self.device = device
         self.reset()
@@ -352,31 +350,31 @@ def compute_isometric_loss(act_dict, autoencoder, k) -> tuple:
 #     return loss
 
 
-def compute_eigenspace_loss(act_dict, autoencoder, k) -> tuple:
-    # eye = torch.eye(V.shape[0], device=V.device)
-    # V_inv = torch.linalg.solve(V, eye)
+# def compute_eigenspace_loss(act_dict, autoencoder, k) -> tuple:
+#     # eye = torch.eye(V.shape[0], device=V.device)
+#     # V_inv = torch.linalg.solve(V, eye)
 
-    acts = list(act_dict.values())
-    starting_acts = acts[0]
-    phi_x = autoencoder.encode(starting_acts)
-    Vt_phi_X = autoencoder.koopman_eigenspace(phi_x)
+#     acts = list(act_dict.values())
+#     starting_acts = acts[0]
+#     phi_x = autoencoder.encode(starting_acts)
+#     Vt_phi_X = autoencoder.koopman_eigenspace(phi_x)
 
-    # L1 sparsity - average across both batch and features
-    sparsity_raw = torch.mean(torch.abs(Vt_phi_X))
+#     # L1 sparsity - average across both batch and features
+#     sparsity_raw = torch.mean(torch.abs(Vt_phi_X))
 
-    # For an FVU-like metric (0-1 range, lower is better)
-    # Use the ratio of L1 to L2 norms, normalized
-    l1_norm = torch.sum(torch.abs(Vt_phi_X), dim=1)  # Sum abs values per example
-    l2_norm = torch.norm(Vt_phi_X, p=2, dim=1)  # Euclidean norm per example
-    n_dims = Vt_phi_X.shape[1]
+#     # For an FVU-like metric (0-1 range, lower is better)
+#     # Use the ratio of L1 to L2 norms, normalized
+#     l1_norm = torch.sum(torch.abs(Vt_phi_X), dim=1)  # Sum abs values per example
+#     l2_norm = torch.norm(Vt_phi_X, p=2, dim=1)  # Euclidean norm per example
+#     n_dims = Vt_phi_X.shape[1]
 
-    # This gives a measure of "effective sparsity" - closer to 1 for dense, closer to 0 for sparse
-    sparsity_ratio = l1_norm / (
-        l2_norm * torch.sqrt(torch.tensor(n_dims, dtype=torch.float, device=Vt_phi_X.device))
-    )
-    sparsity_fvu = torch.mean(sparsity_ratio)
+#     # This gives a measure of "effective sparsity" - closer to 1 for dense, closer to 0 for sparse
+#     sparsity_ratio = l1_norm / (
+#         l2_norm * torch.sqrt(torch.tensor(n_dims, dtype=torch.float, device=Vt_phi_X.device))
+#     )
+#     sparsity_fvu = torch.mean(sparsity_ratio)
 
-    return sparsity_raw, sparsity_fvu
+#     return sparsity_raw, sparsity_fvu
 
 
 ########################## Nuclear Norm Loss ##########################

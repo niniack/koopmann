@@ -85,17 +85,24 @@ def save_autoencoder(autoencoder, config, flavor, **kwargs):
         return None
 
     os.makedirs(os.path.dirname(config.save_dir), exist_ok=True)
+
+    suffix = config.suffix if config.suffix else ""
+    suffix = suffix + "_adv" if config.adv.use_adversarial_training else suffix
+    suffix = suffix + f"_seed_{config.seed}"
+
     filename = (
         f"dim_{config.autoencoder.ae_dim}_"
         f"k_{config.scale.num_scaled_layers}_"
         f"loc_{config.scale.scale_location}_"
         f"{flavor}_"
-        f"autoencoder_{config.save_name}.safetensors"
+        f"autoencoder_{config.save_name}"
+        f"{suffix}"
+        ".safetensors"
     )
+
     ae_path = Path(config.save_dir, filename)
 
-    suffix = config.suffix if config.suffix else ""
-    suffix = suffix + "_adv" if config.adv.use_adversarial_training else suffix
+    # NOTE: We manually apply suffix beforehand
     autoencoder.save_model(ae_path, suffix=None, **kwargs)
 
     return ae_path
@@ -180,7 +187,6 @@ def train_one_epoch(model, autoencoder, act_dict, device, config, epoch, optimiz
             "state_pred": lambda_state_pred * metrics.batch_metrics.raw_state_pred,
             "latent_pred": lambda_latent_pred * metrics.batch_metrics.raw_latent_pred,
             "isometric": lambda_isometric * metrics.batch_metrics.raw_distance,
-            "sparsity": 0 * metrics.batch_metrics.raw_sparsity,
         }
 
         # Track the combined loss as before
@@ -287,7 +293,6 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]] = None):
             logger.info(
                 f"Epoch {epoch + 1}/{config.optim.num_epochs}, "
                 f"Eval FVU State Pred: {metrics['fvu_state_pred']:.4f}, "
-                f"Raw Sparsity: {metrics['raw_sparsity']:.4f}, "
             )
 
     wandb.finish()
@@ -297,7 +302,10 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]] = None):
     ae_file_name = save_autoencoder(autoencoder, config, flavor, **extra_metadata)
 
     # Save preprocessing tensors
-    save_file(preproc_dict, f"{ae_file_name.parent}/{ae_file_name.stem}_preprocessing.safetensors")
+    save_file(
+        preproc_dict,
+        f"{ae_file_name.parent}/{ae_file_name.stem}_preprocessing.safetensors",
+    )
 
 
 if __name__ == "__main__":

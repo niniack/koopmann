@@ -29,10 +29,8 @@ einops = "^0.8.0"
 ruff = "^0.7.1"
 ipywidgets = "^8.1.5"
 numpy = "*"
-scipy = "^1.14.1"
+scipy = "*"
 scikit-learn = "^1.3.0"
-jupyter-bokeh = "^4.0.5"
-repsim = {git = "https://github.com/wrongu/repsim"}
 nbformat = "^5.10.4"
 typer = "^0.15.1"
 pyfonts = "^0.0.2"
@@ -41,16 +39,14 @@ imageio = {extras = ["ffmpeg"], version = "^2.36.1"}
 matplotlib = "^3.10.0"
 neural-collapse = {git = "https://github.com/rhubarbwu/neural-collapse.git"}
 wandb = "^0.19.6"
-foolbox = "^3.3.4"
 click = "^8.1.8"
-torchattacks = "^3.5.1"
-hessian-eigenthings = {git = "https://github.com/noahgolmant/pytorch-hessian-eigenthings.git", rev = "master"}
 torchviz = "^0.0.3"
 ipykernel = "*"
 deprecated = "^1.2.18"
 plotly = "5.24.1"
 scikit-tda = "^1.1.1"
 giotto-ph = "^0.2.4"
+requests = ">=2.27"
 
 [[tool.poetry.source]]
 name = "pytorch_cpu"

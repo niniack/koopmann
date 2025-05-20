@@ -10,7 +10,7 @@ package-mode = true
 python = ">=3.10,<3.13"
 torch = [
     # { version = "2.1.0", markers = "sys_platform == 'darwin'" },
-    { version = ">=2.1.0+cu121", source = "pytorch_cuda", markers = "sys_platform == 'linux'" }
+    { version = ">=2.1.0", source = "pytorch_cuda", markers = "sys_platform == 'linux'" }
 ]
 torchvision = [
     # { version = "*", platform="darwin"},

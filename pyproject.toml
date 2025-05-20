@@ -10,7 +10,7 @@ package-mode = true
 python = ">=3.10,<3.13"
 torch = [
     # { version = "2.1.0", markers = "sys_platform == 'darwin'" },
-    { version = "2.1.0+cu121", source = "pytorch_cuda", markers = "sys_platform == 'linux'" }
+    { version = ">=2.1.0+cu121", source = "pytorch_cuda", markers = "sys_platform == 'linux'" }
 ]
 torchvision = [
     # { version = "*", platform="darwin"},
@@ -43,8 +43,6 @@ neural-collapse = {git = "https://github.com/rhubarbwu/neural-collapse.git"}
 wandb = "^0.19.6"
 foolbox = "^3.3.4"
 click = "^8.1.8"
-adversarial-robustness-toolbox = "^1.19.1"
-panel = "^1.6.2"
 torchattacks = "^3.5.1"
 hessian-eigenthings = {git = "https://github.com/noahgolmant/pytorch-hessian-eigenthings.git", rev = "master"}
 torchviz = "^0.0.3"

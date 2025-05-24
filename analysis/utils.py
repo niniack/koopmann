@@ -1,3 +1,5 @@
+import plotly.express as px
+
 from koopmann.models import (
     MLP,
     ConvResNet,
@@ -6,7 +8,6 @@ from koopmann.models import (
     LowRankKoopmanAutoencoder,
     ResMLP,
 )
-import plotly.express as px
 
 
 def load_autoencoder(file_dir: str, ae_name: str):

@@ -6,7 +6,6 @@ from pydantic import (
     NonNegativeFloat,
     NonNegativeInt,
     PositiveFloat,
-    PositiveInt,
 )
 
 

@@ -3,27 +3,14 @@ from typing import Optional
 from pydantic import (
     BaseModel,
     ConfigDict,
-    NonNegativeFloat,
     NonNegativeInt,
     PositiveInt,
     ValidationInfo,
     field_validator,
-    model_validator,
 )
 
 from koopmann.data import DatasetConfig
 from scripts.common_config_def import OptimConfig, WandBConfig
-
-
-class AdvConfig(BaseModel):
-    use_adversarial_training: bool
-    epsilon: Optional[NonNegativeFloat] = None
-
-    @model_validator(mode="after")
-    def validate_epsilon(self) -> "AdvConfig":
-        if self.use_adversarial_training and self.epsilon is None:
-            raise ValueError("epsilon is required when use_adversarial_training is True")
-        return self
 
 
 class ModelConfig(BaseModel):
@@ -59,7 +46,6 @@ class Config(BaseModel):
     optim: OptimConfig
     model: ModelConfig
     wandb: WandBConfig
-    adv: AdvConfig
     seed: NonNegativeInt = 0
     print_freq: PositiveInt
     batch_size: PositiveInt

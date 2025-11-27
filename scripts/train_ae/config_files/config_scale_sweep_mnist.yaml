@@ -83,12 +83,6 @@ parameters:
         value: 1
       num_scaled_layers:
         value: 10
-  adv:
-    parameters:
-      use_adversarial_training:
-        value: false
-      epsilon:
-        value: 0.08
   wandb:
     parameters:
       use_wandb:

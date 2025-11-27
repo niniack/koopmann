@@ -37,9 +37,7 @@ autoencoder:
   # koopman_rank: 20
   whiten_alpha: 1
 
-adv: 
-    use_adversarial_training: False
-    epsilon: 0.08
+
 
 task_type: "autoencoder"
 batch_size: 1_024

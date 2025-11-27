@@ -6,13 +6,13 @@ import fire
 import numpy as np
 import torch
 import torchattacks
+import wandb
 from config_def import Config
 from torch import nn
 from torch.nn import Module
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 
-import wandb
 from koopmann.log import logger
 from koopmann.models import MLP, ResMLP, resnet18, resnet18_mnist
 from koopmann.utils import get_device
@@ -64,7 +64,6 @@ def save_model(model, config, dataset_name):
     model_path = Path(config.save_dir)
 
     suffix = config.suffix if config.suffix else ""
-    suffix = suffix + "_adv" if config.adv.use_adversarial_training else suffix
     model.save_model(model_path, suffix=suffix, dataset=dataset_name)
 
 
@@ -111,136 +110,6 @@ def evaluate_model(model, dataloader, device):
     return {
         "clean_accuracy": 100 * clean_correct / total,
     }
-
-
-def evaluate_adversarial_robustness(
-    model, dataloader, device, dataset_mean, dataset_std, epsilon=(8 / 255)
-):
-    model.eval()
-
-    # Initialize attacks
-    fgsm_torch_attack = torchattacks.FGSM(model, eps=epsilon)
-    fgsm_torch_attack.set_normalization_used(mean=dataset_mean, std=dataset_std)
-
-    pgd_torch_attack = torchattacks.PGD(model, eps=epsilon, alpha=epsilon / 4, steps=40)
-    pgd_torch_attack.set_normalization_used(mean=dataset_mean, std=dataset_std)
-
-    clean_correct = 0
-    fgsm_correct = 0
-    pgd_correct = 0
-    total = 0
-
-    for inputs, labels in dataloader:
-        inputs, labels = inputs.to(device), labels.to(device).squeeze()
-        batch_size = inputs.size(0)
-        total += batch_size
-
-        # Clean accuracy
-        with torch.no_grad():
-            outputs = model(inputs)
-            _, predicted = outputs.max(1)
-            clean_correct += predicted.eq(labels).sum().item()
-
-        # FGSM accuracy
-        fgsm_inputs = fgsm_torch_attack(inputs, labels)
-        with torch.no_grad():
-            fgsm_outputs = model(fgsm_inputs)
-            _, fgsm_predicted = fgsm_outputs.max(1)
-            fgsm_correct += fgsm_predicted.eq(labels).sum().item()
-
-        # PGD accuracy
-        pgd_inputs = pgd_torch_attack(inputs, labels)
-        with torch.no_grad():
-            pgd_outputs = model(pgd_inputs)
-            _, pgd_predicted = pgd_outputs.max(1)
-            pgd_correct += pgd_predicted.eq(labels).sum().item()
-
-    return {
-        "clean_accuracy": 100 * clean_correct / total,
-        "fgsm_accuracy": 100 * fgsm_correct / total,
-        "pgd_accuracy": 100 * pgd_correct / total,
-    }
-
-
-def train_one_epoch_adversarial(
-    model: Module,
-    train_loader: DataLoader,
-    device: torch.device,
-    criterion: Module,
-    optimizer: Optimizer,
-    epoch: int,
-    epsilon: float = (8 / 255),
-    use_mixed_batch: bool = False,
-    mixed_ratio: float = 0.5,
-    dataset_mean=None,
-    dataset_std=None,
-) -> dict:
-    model.to(device).train()
-    metrics = {
-        "train/loss": 0.0,
-        "train/accuracy": 0.0,
-        "train/adv_loss": 0.0,
-        "train/adv_accuracy": 0.0,
-    }
-    num_batches = len(train_loader)
-
-    # Create FGSM attack with normalization
-    fgsm_attack = torchattacks.FGSM(model, eps=epsilon)
-    fgsm_attack.set_normalization_used(mean=dataset_mean, std=dataset_std)
-
-    for batch_idx, (inputs, labels) in enumerate(train_loader):
-        inputs, labels = inputs.to(device), labels.to(device).squeeze()
-        batch_size = inputs.size(0)
-
-        # Clean forward pass
-        outputs = model(inputs)
-        clean_loss = criterion(outputs, labels)
-
-        # Get adversarial examples using torchattacks (handles normalization internally)
-        adv_inputs = fgsm_attack(inputs, labels)
-
-        # If using mixed batch, create the mixed input
-        if use_mixed_batch:
-            # Two separate forward passes instead of mixing the batch
-            # Forward pass on clean examples
-            optimizer.zero_grad()
-            clean_outputs = model(inputs)
-            clean_batch_loss = criterion(clean_outputs, labels)
-            clean_batch_loss.backward()
-
-            # Forward pass on adversarial examples
-            adv_outputs = model(adv_inputs)
-            adv_batch_loss = criterion(adv_outputs, labels)
-            adv_batch_loss.backward()
-
-            # Combined loss for metrics
-            adv_loss = mixed_ratio * adv_batch_loss + (1 - mixed_ratio) * clean_batch_loss
-        else:
-            # Forward pass on only adversarial examples
-            optimizer.zero_grad()
-            adv_outputs = model(adv_inputs)
-            adv_loss = criterion(adv_outputs, labels)
-            adv_loss.backward()
-
-        optimizer.step()
-
-        # Calculate metrics
-        _, predicted = outputs.max(1)
-        clean_correct = predicted.eq(labels).sum().item()
-
-        _, adv_predicted = adv_outputs.max(1)
-        adv_correct = adv_predicted.eq(labels).sum().item()
-
-        metrics["train/loss"] += clean_loss.item()
-        metrics["train/accuracy"] += clean_correct / batch_size
-        metrics["train/adv_loss"] += adv_loss.item()
-        metrics["train/adv_accuracy"] += adv_correct / batch_size
-
-    # Normalize metrics
-    for key in metrics:
-        metrics[key] /= num_batches
-
-    return metrics
 
 
 def train_one_epoch(
@@ -324,30 +193,14 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]] = None):
 
     metrics = {}
     for epoch in range(config.optim.num_epochs):
-        # Train one epoch
-        if config.adv.use_adversarial_training:
-            metrics = train_one_epoch_adversarial(
-                model=model,
-                train_loader=train_loader,
-                device=device,
-                criterion=loss,
-                optimizer=optimizer,
-                epoch=epoch,
-                epsilon=config.adv.epsilon,
-                use_mixed_batch=True,
-                mixed_ratio=0.4,
-                dataset_mean=train_dataset.mean,
-                dataset_std=train_dataset.std,
-            )
-        else:
-            metrics = train_one_epoch(
-                model=model,
-                train_loader=train_loader,
-                device=device,
-                criterion=loss,
-                optimizer=optimizer,
-                epoch=epoch,
-            )
+        metrics = train_one_epoch(
+            model=model,
+            train_loader=train_loader,
+            device=device,
+            criterion=loss,
+            optimizer=optimizer,
+            epoch=epoch,
+        )
 
         # Log metrics
         if scheduler:
@@ -374,30 +227,17 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]] = None):
             # )
             # metrics.update({"curvature": curvature})
 
-            # Adv test stats
-
-            if config.adv.use_adversarial_training:
-                eval_metrics = evaluate_adversarial_robustness(
-                    model=model,
-                    dataloader=test_loader,
-                    device=device,
-                    dataset_mean=train_dataset.mean,
-                    dataset_std=train_dataset.std,
-                    epsilon=config.adv.epsilon,
-                )
-            else:
-                eval_metrics = evaluate_model(
-                    model=model,
-                    dataloader=test_loader,
-                    device=device,
-                )
+            eval_metrics = evaluate_model(
+                model=model,
+                dataloader=test_loader,
+                device=device,
+            )
 
             metrics.update(eval_metrics)
 
             # Print out
             logger.info(
-                f"Epoch {epoch + 1}/{config.optim.num_epochs}, "
-                f"Loss: {metrics['train/loss']:.4f}, "
+                f"Epoch {epoch + 1}/{config.optim.num_epochs}, Loss: {metrics['train/loss']:.4f}, "
             )
 
         # Log all epoch metrics

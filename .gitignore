@@ -11,6 +11,5 @@ wandb/
 *slurm*
 *.png
 *.jpeg
-adv_output/
 jobs/
 .env

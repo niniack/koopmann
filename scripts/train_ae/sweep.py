@@ -1,10 +1,10 @@
 from pathlib import Path
 
 import fire
+import wandb
 import yaml
 
-import wandb
-from scripts.train_ae.scale import main as run_scale
+from scripts.train_ae.train import main as run_scale
 
 
 def main(sweep_config_path: Path):

@@ -4,10 +4,10 @@ from typing import Optional, Union
 
 import fire
 import torch
+import wandb
 from config_def import Config, KoopmanParam
 from safetensors.torch import save_file
 
-import wandb
 from koopmann import models as kmodels
 from koopmann.log import logger
 from koopmann.mixins import Serializable
@@ -87,7 +87,6 @@ def save_autoencoder(autoencoder, config, flavor, **kwargs):
     os.makedirs(os.path.dirname(config.save_dir), exist_ok=True)
 
     suffix = config.suffix if config.suffix else ""
-    suffix = suffix + "_adv" if config.adv.use_adversarial_training else suffix
     suffix = suffix + f"_seed_{config.seed}"
 
     filename = (
@@ -264,18 +263,15 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]] = None):
     metrics = {}
     # Training loop
     for epoch in range(config.optim.num_epochs):
-        if config.adv.use_adversarial_training:
-            raise NotImplementedError()
-        else:
-            metrics = train_one_epoch(
-                model=model,
-                autoencoder=autoencoder,
-                act_dict=train_act_dict,
-                device=device,
-                config=config,
-                epoch=epoch,
-                optimizer=optimizer,
-            )
+        metrics = train_one_epoch(
+            model=model,
+            autoencoder=autoencoder,
+            act_dict=train_act_dict,
+            device=device,
+            config=config,
+            epoch=epoch,
+            optimizer=optimizer,
+        )
 
         scheduler.step()
 

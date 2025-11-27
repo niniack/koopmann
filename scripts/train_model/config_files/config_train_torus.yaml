@@ -24,9 +24,6 @@ wandb:
     entity: "nishantaswani"
     project: "koopman_interp"
 
-adv: 
-    use_adversarial_training: False
-    epsilon: 0.08
 
 seed: 0
 batch_size: 512

@@ -14,17 +14,6 @@ from koopmann.data import DatasetConfig
 from scripts.common_config_def import OptimConfig, WandBConfig
 
 
-class AdvConfig(BaseModel):
-    use_adversarial_training: bool
-    epsilon: Optional[NonNegativeFloat] = None
-
-    @model_validator(mode="after")
-    def validate_epsilon(self) -> "AdvConfig":
-        if self.use_adversarial_training and self.epsilon is None:
-            raise ValueError("epsilon is required when use_adversarial_training is True")
-        return self
-
-
 # ScaleConfig for scale-related parameters
 class ScaleConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -82,7 +71,6 @@ class Config(BaseModel):
     scale: ScaleConfig
     wandb: WandBConfig
     autoencoder: AutoencoderConfig
-    adv: AdvConfig
     batch_size: PositiveInt
     print_freq: PositiveInt
     seed: NonNegativeInt = 0

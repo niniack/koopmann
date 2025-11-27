@@ -36,10 +36,6 @@ autoencoder:
   koopman_param: "exponential"
   whiten_alpha: 1.0
 
-adv: 
-    use_adversarial_training: False
-    epsilon: 0.08
-
 task_type: "autoencoder"
 batch_size: 2048
 seed: 21

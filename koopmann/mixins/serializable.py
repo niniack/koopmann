@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from ast import literal_eval
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Tuple, Union
+from typing import Any, Dict, Optional, Tuple, Union
 
 import safetensors.torch as st
 import torch.nn as nn
@@ -54,7 +54,7 @@ class Serializable(ABC):
             meta_data_dict[k] = v
         return meta_data_dict
 
-    def save_model(self, file_path: Union[str, Path], suffix, **metadata) -> None:
+    def save_model(self, file_path: Union[str, Path], suffix: Optional = None, **metadata) -> None:
         """Save model to file with metadata."""
         path = Path(file_path)
 

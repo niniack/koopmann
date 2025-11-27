@@ -2,8 +2,6 @@ __all__ = [
     "Autoencoder",
     "KoopmanAutoencoder",
     "ExponentialKoopmanAutencoder",
-    "LowRankKoopmanAutoencoder",
-    "FrankensteinKoopmanAutoencoder",
 ]
 import warnings
 from collections import namedtuple
@@ -12,10 +10,9 @@ from typing import Any, Optional
 import torch
 import torch.nn as nn
 import torch.nn.utils.parametrize as parametrize
-from deprecated import deprecated
 
 from koopmann.models.base import BaseTorchModel
-from koopmann.models.layers import LinearLayer, LoRALinearLayer
+from koopmann.models.layers import LinearLayer
 from koopmann.models.utils import eigeninit
 
 VanillaAutoencoderResult = namedtuple("VanillaAutoencoderResult", "latent reconstruction")
@@ -79,7 +76,6 @@ class Autoencoder(BaseTorchModel):
                 bias=self.bias,
                 batchnorm=self.batchnorm if (i != len(channel_dims) - 1) else None,
                 nonlinearity=self.nonlinearity if (i != len(channel_dims) - 1) else None,
-                # nonlinearity=self.nonlinearity,
             )
 
             encoder_layer.apply(LinearLayer.init_weights)
@@ -103,8 +99,6 @@ class Autoencoder(BaseTorchModel):
             )
 
             decoder_layer.apply(LinearLayer.init_weights)
-            # NOTE: spectral normalization
-            # spectral_norm(decoder_layer.components.linear)
             decoder.add_module(f"decoder_{i}", decoder_layer)
 
         return decoder
@@ -237,77 +231,6 @@ class KoopmanAutoencoder(Autoencoder):
         return metadata
 
 
-### EXPONENTIAL PARAM KOOPMAN AUTOENCODER
-# class ExponentialKoopmanAutencoder(KoopmanAutoencoder):
-#     """Koopman autoencoder model with exp parameterization."""
-
-#     def __init__(
-#         self,
-#         k_steps: int,
-#         in_features: int = 2,
-#         latent_features: int = 4,
-#         hidden_config: Optional[list[int]] = None,
-#         bias: bool = True,
-#         batchnorm: bool = False,
-#         nonlinearity: str = "leaky_relu",
-#         use_eigeninit: Optional[bool] = False,
-#         **kwargs,
-#     ):
-#         super().__init__(
-#             k_steps,
-#             in_features,
-#             latent_features,
-#             hidden_config,
-#             bias,
-#             batchnorm,
-#             nonlinearity,
-#             use_eigeninit,
-#         )
-
-#         # NOTE: Weird convention
-#         # K is (weirdly) parameterized as V^-1 @ D @ V
-#         # Following convention, we apply x @ K.T
-#         # K.T = V.T @ D @ V^-1.T
-#         # The benefit of this is that entering the eignespace does not require computing an inverse.
-#         self._V = nn.Linear(latent_features, latent_features, bias=False)
-#         nn.init.xavier_normal_(self._V.weight)
-#         self._D = nn.Parameter(torch.ones(latent_features))
-
-#         class Lambda(nn.Module):
-#             def __init__(self, func):
-#                 super().__init__()
-#                 self.func = func
-
-#             def forward(self, x):
-#                 return self.func(x)
-
-#         self.components.koopman_matrix = nn.Sequential(Lambda(lambda x: x @ self.koopman_weights.T))
-
-#     @property
-#     def V(self):
-#         return self._V.weight
-
-#     @property
-#     def V_inv(self):
-#         eye = torch.eye(self.V.shape[0], device=self.V.device)
-#         return torch.linalg.solve(self.V, eye)
-#         # return torch.linalg.lstsq(self.V, eye).solution
-
-#     @property
-#     def D_exp(self):
-#         return torch.matrix_exp(torch.diag(self._D) / self.k_steps)
-
-#     @property
-#     def koopman_weights(self):
-#         return self.V_inv @ self.D_exp @ self.V
-
-#     def koopman_forward(self, observable, k_steps):
-#         return observable @ self.V.T @ torch.linalg.matrix_power(self.D_exp, k_steps) @ self.V_inv.T
-
-#     def koopman_eigenspace(self, observable):
-#         return observable @ self.V.T
-
-
 class ExponentialKoopmanAutencoder(KoopmanAutoencoder):
     """Koopman autoencoder model with exp parameterization."""
 
@@ -352,98 +275,3 @@ class MatrixExponential(nn.Module):
 
     def forward(self, X):
         return torch.matrix_exp(X / self.k_steps)  # Scale M by 1/k
-
-
-@deprecated(
-    reason="Previously used with torch parameterizations on a linear weight matrix. It's now directly done using an eigendecomposition."
-)
-class MatrixExponential(nn.Module):
-    def __init__(self, k_steps, latent_features):
-        super().__init__()
-        self.k_steps = k_steps  # Number of steps
-        self.latent_features = latent_features
-
-    def forward(self, X):
-        return torch.matrix_exp(X / self.k_steps)  # Scale M by 1/k
-
-
-### LOW RANK PARAM KOOPMAN AUTOENCODER
-class LowRankKoopmanAutoencoder(KoopmanAutoencoder):
-    """Koopman autoencoder model with low rank parameterization."""
-
-    def __init__(
-        self,
-        rank: int,
-        k_steps: int,
-        in_features: int = 2,
-        latent_features: int = 4,
-        hidden_config: Optional[list[int]] = None,
-        bias: bool = True,
-        batchnorm: bool = False,
-        nonlinearity: str = "leaky_relu",
-        use_eigeninit: Optional[bool] = False,
-        **kwargs,
-    ):
-        super().__init__(
-            k_steps,
-            in_features,
-            latent_features,
-            hidden_config,
-            bias,
-            batchnorm,
-            nonlinearity,
-            use_eigeninit,
-        )
-        self.rank = rank
-
-        self.components.koopman_matrix = LoRALinearLayer(
-            in_channels=latent_features,
-            out_channels=latent_features,
-            rank=rank,
-            bias=False,
-            batchnorm=False,
-            nonlinearity=None,
-        )
-
-    @property
-    def koopman_weights(self):
-        return (
-            self.components.koopman_matrix.components.lora_up.weight
-            @ self.components.koopman_matrix.components.lora_down.weight
-        )
-
-    def _get_basic_metadata(self) -> dict[str, Any]:
-        """Get model-specific metadata for serialization."""
-        metadata = super()._get_basic_metadata()
-        metadata.update(
-            {
-                "rank": self.rank,
-            }
-        )
-
-        return metadata
-
-
-# NOTE: Irrelevant for now
-class FrankensteinKoopmanAutoencoder(nn.Module):
-    def __init__(self, koopman_autoencoder, original_model, scale_idx=0):
-        super().__init__()
-
-        # Settings
-        self.scale_idx = scale_idx
-        self.rank = koopman_autoencoder.rank
-        self.k_steps = koopman_autoencoder.k_steps
-        self.latent_features = koopman_autoencoder.latent_features
-
-        # Components
-        self.start_components = nn.Sequential(
-            original_model.components[: self.scale_idx],
-        )
-        self.koopman_autoencoder = koopman_autoencoder
-        self.end_components = nn.Sequential(original_model.components[-1:])
-
-    def forward(self, x) -> torch.Tensor:
-        x = self.start_components(x)
-        x = self.koopman_autoencoder(x, k=self.k_steps).predictions[-1]
-        x = self.end_components(x)
-        return x

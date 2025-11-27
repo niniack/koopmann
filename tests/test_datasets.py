@@ -10,7 +10,7 @@ def test_mnist_dataset():
     DatasetClass = get_dataset_class(name=dataset_config.dataset_name)
     dataset = DatasetClass(config=dataset_config)
     assert len(dataset) == 60_000
-    assert dataset.in_features == 784
+    assert dataset.in_features == (1, 28, 28)
 
     label = dataset[0][1]
     assert label >= 0 and label <= 9
@@ -24,7 +24,7 @@ def test_binary_mnist_dataset():
     dataset = DatasetClass(config=dataset_config, binarize_target=0)
 
     assert len(dataset) == 60_000
-    assert dataset.in_features == 784
+    assert dataset.in_features == (1, 28, 28)
 
     label = dataset[0][1]
     assert label >= 0 and label <= 1

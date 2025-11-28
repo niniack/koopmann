@@ -305,7 +305,7 @@ class DecompExponentialKoopmanAutencoder(KoopmanAutoencoder):
 
 
 ### (Old) EXPONENTIAL AUTOENCODER: parameterization based
-@deprecated("Parameterizationa approach to exponential autoencoder.")
+@deprecated("Parameterization approach to exponential autoencoder.")
 class ParamExponentialKoopmanAutencoder(KoopmanAutoencoder):
     """Koopman autoencoder model with exp parameterization."""
 
@@ -342,7 +342,7 @@ class ParamExponentialKoopmanAutencoder(KoopmanAutoencoder):
         )
 
 
-@deprecated("Parameterizationa approach to exponential autoencoder.")
+@deprecated("Parameterization approach to exponential autoencoder.")
 class MatrixExponential(nn.Module):
     def __init__(self, k_steps, latent_features):
         super().__init__()

@@ -114,7 +114,7 @@ class ConvResNet(BaseTorchModel):
             first_stride = 1 if stage_idx == 0 else 2
 
             # Add first block of the stage (potential downsampling)
-            block_name = f"stage_{stage_idx+1}_block_1"
+            block_name = f"stage_{stage_idx + 1}_block_1"
 
             # Calculate drop probability for stochastic depth
             drop_prob = 0.0
@@ -143,7 +143,7 @@ class ConvResNet(BaseTorchModel):
 
             # Add remaining blocks in the stage
             for block_num in range(2, num_blocks + 1):
-                block_name = f"stage_{stage_idx+1}_block_{block_num}"
+                block_name = f"stage_{stage_idx + 1}_block_{block_num}"
 
                 # Calculate drop probability for stochastic depth
                 drop_prob = 0.0

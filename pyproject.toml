@@ -33,6 +33,8 @@ dependencies = [
     "plotly==5.24.1",
     "giotto-ph>=0.2.4,<0.3",
     "python-dotenv>=1.2.1",
+    "seaborn>=0.13.2",
+    "latex>=0.7.0",
 ]
 
 [dependency-groups]

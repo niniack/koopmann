@@ -29,32 +29,56 @@ class Serializable(ABC):
         pass
 
     @staticmethod
-    def parse_safetensors_metadata(file_path: Union[str, Path]) -> dict:
+    def parse_safetensors_metadata(file_path: Union[str, Path]) -> Dict[str, str]:
         """Parse the model's metadata from the safetensors file."""
 
         # Convert Path to string if needed
         file_path = str(file_path)
 
+        # safetensors files store an 8-byte little-endian header length followed
+        # by a JSON blob. We only need the '__metadata__' key if present.
         header_size = 8
-        meta_data = {}
-        if os.stat(file_path).st_size > header_size:
-            with open(file_path, "rb") as f:
-                b8 = f.read(header_size)
-                if len(b8) == header_size:
-                    header_len = int.from_bytes(b8, "little", signed=False)
-                    headers = f.read(header_len)
-                    if len(headers) == header_len:
-                        meta_data = sorted(
-                            json.loads(headers.decode("utf-8"))
-                            .get("__metadata__", meta_data)
-                            .items()
-                        )
-        meta_data_dict = {}
-        for k, v in meta_data:
-            meta_data_dict[k] = v
-        return meta_data_dict
 
-    def save_model(self, file_path: Union[str, Path], suffix: Optional = None, **metadata) -> None:
+        # If file is too small to contain a header, return empty metadata.
+        try:
+            if os.stat(file_path).st_size <= header_size:
+                return {}
+        except OSError:
+            return {}
+
+        # Read metadata
+        try:
+            with open(file_path, "rb") as f:
+                header_bytes = f.read(header_size)
+                if len(header_bytes) != header_size:
+                    return {}
+
+                # Interpret the first 8 bytes as a little-endian integer
+                # which gives the length of the following JSON header.
+                header_len = int.from_bytes(header_bytes, "little", signed=False)
+                headers = f.read(header_len)
+                if len(headers) != header_len:
+                    return {}
+
+                try:
+                    headers_json = json.loads(headers.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    return {}
+
+                # Extract the '__metadata__' dict if present. Values stored
+                # in safetensors metadata are strings; we keep them as-is here
+                # and convert types later in `_parse_metadata`.
+                metadata = headers_json.get("__metadata__", {})
+                if isinstance(metadata, dict):
+                    return dict(metadata)
+                # If metadata is present but not a dict, return empty.
+                return {}
+        except OSError:
+            return {}
+
+    def save_model(
+        self, file_path: Union[str, Path], suffix: Optional[str] = None, **metadata
+    ) -> Path:
         """Save model to file with metadata."""
         path = Path(file_path)
 
@@ -63,6 +87,8 @@ class Serializable(ABC):
             model_name = self.__class__.__name__.lower()
 
             # Apply suffix if provided
+            # `suffix` is appended to the generated model name (if provided).
+            # An empty string or None means no suffix is used.
             if suffix and suffix != "":
                 model_name = f"{model_name}_{suffix}"
 
@@ -75,8 +101,9 @@ class Serializable(ABC):
 
             # Create the full path
             final_path = path / filename
+
+        # User provided a complete filename
         else:
-            # User provided a complete filename
             final_path = path
             # Ensure it has the correct extension
             if final_path.suffix != ".safetensors":
@@ -98,6 +125,8 @@ class Serializable(ABC):
         combined_metadata = {**standard_metadata, **basic_metadata, **metadata}
 
         # Convert all metadata to strings for safetensors
+        # Safetensors requires string metadata; cast here and leave parsing
+        # of types to `_parse_metadata` when re-loading.
         string_metadata = {k: str(v) for k, v in combined_metadata.items()}
 
         # Save using safetensors
@@ -107,29 +136,34 @@ class Serializable(ABC):
 
     @classmethod
     def load_model(cls, file_path: Union[str, Path], **kwargs) -> Tuple[nn.Module, Dict[str, Any]]:
-        """Load model from file."""
-        # Parse metadata
-        metadata = cls.parse_safetensors_metadata(file_path)
+        """Load a model from a safetensors file."""
 
-        # Convert metadata values from strings
-        parsed_metadata = cls._parse_metadata(metadata)
+        # Try parsing metadata
+        try:
+            metadata = cls.parse_safetensors_metadata(file_path)
+            parsed_metadata = cls._parse_metadata(metadata)
+        except Exception as e:
+            raise ValueError(f"Failed to load metadata from {file_path}: {e}")
 
-        # Filter metadata to only include constructor parameters
-
-        init_params = inspect.signature(cls.__init__).parameters.keys()
-        init_params = [p for p in init_params if p != "self"]
-
-        # Filter metadata to only include init parameters
-        init_kwargs = {k: v for k, v in parsed_metadata.items() if k in init_params}
-
-        # Update with explicit kwargs (which override metadata)
+        # Get constructor signature and filter metadata to only include
+        # explicit constructor parameters (exclude `self`, *args, **kwargs).
+        # This avoids passing unexpected keys from metadata into `__init__`.
+        sig = inspect.signature(cls.__init__)
+        init_param_names = {
+            name
+            for name, param in sig.parameters.items()
+            if name != "self"
+            and param.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+        }
+        init_kwargs = {k: v for k, v in parsed_metadata.items() if k in init_param_names}
         init_kwargs.update(kwargs)
 
-        # Create model instance
-        model = cls(**init_kwargs)
-
-        # Load weights
-        st.load_model(model, file_path, device=get_device())
+        # Load model with kwargs
+        try:
+            model = cls(**init_kwargs)
+            st.load_model(model, file_path, device=get_device())
+        except Exception as e:
+            raise ValueError(f"Failed to load model from {file_path}: {e}")
 
         return model, parsed_metadata
 
@@ -142,5 +176,4 @@ class Serializable(ABC):
                 parsed[key] = literal_eval(value)
             except (ValueError, SyntaxError):
                 parsed[key] = value
-
         return parsed

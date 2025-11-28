@@ -1,27 +1,36 @@
+import plotly.express as px
+
 from koopmann.models import (
     MLP,
     ConvResNet,
-    ExponentialKoopmanAutencoder,
+    DecompExponentialKoopmanAutencoder,
     KoopmanAutoencoder,
-    LowRankKoopmanAutoencoder,
+    ParamExponentialKoopmanAutencoder,
     ResMLP,
 )
-import plotly.express as px
 
 
 def load_autoencoder(file_dir: str, ae_name: str):
-    # Autoenoder path in work dir
+    # Autoencoder path in work dir
     ae_file_path = f"{file_dir}/{ae_name}.safetensors"
 
     # Choose model based on flag
     if "standard" in ae_name:
         AutoencoderClass = KoopmanAutoencoder
-    elif "lowrank" in ae_name:
-        AutoencoderClass = LowRankKoopmanAutoencoder
+        autoencoder, ae_metadata = AutoencoderClass.load_model(file_path=ae_file_path)
     elif "exponential" in ae_name:
-        AutoencoderClass = ExponentialKoopmanAutencoder
+        # Try the decomposed exponential AE first, fall back to parametric variant
+        try:
+            autoencoder, ae_metadata = DecompExponentialKoopmanAutencoder.load_model(
+                file_path=ae_file_path
+            )
+        except Exception:
+            autoencoder, ae_metadata = ParamExponentialKoopmanAutencoder.load_model(
+                file_path=ae_file_path
+            )
+    else:
+        raise ValueError(f"Unknown autoencoder type in name: {ae_name}")
 
-    autoencoder, ae_metadata = AutoencoderClass.load_model(file_path=ae_file_path)
     _ = autoencoder.eval()
 
     return autoencoder, ae_metadata
@@ -59,7 +68,6 @@ def imshow(x):
 
 
 def scatter(x, y, labels, z=None, colormap=None):
-    palette = px.colors.qualitative.Plotly
     # colormap = {
     #     "0": palette[0],
     #     "1": palette[1],

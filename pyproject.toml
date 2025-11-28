@@ -44,6 +44,7 @@ dependencies = [
     "plotly==5.24.1",
     "scikit-tda>=1.1.1,<2",
     "giotto-ph>=0.2.4,<0.3",
+    "python-dotenv>=1.2.1",
 ]
 
 [dependency-groups]

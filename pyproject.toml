@@ -56,8 +56,6 @@ default-groups = [
     "test",
     "dev"
 ]
-cache-dir = "/mnt/nishant/uv_cache"
-link-mode = "symlink"
 
 [[tool.uv.index]]
 name = "pytorch_cpu"

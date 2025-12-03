@@ -1,0 +1,30 @@
+host_model: 
+  hf_name: "HuggingFaceTB/SmolLM-135M"
+
+optim:
+  num_epochs: 100
+  learning_rate: 1e-3
+  weight_decay: 0.0
+  batch_size: 2048
+  type: "adamw"
+
+wandb: 
+    use_wandb: False
+    entity: "nishantaswani"
+    project: "koopman_interp"
+
+autoencoder:
+  k_steps: 10
+  in_features: 576
+  ae_dim: 1_000
+  hidden_config: [800]
+  ae_nonlinearity: "leaky_relu"
+  batchnorm: False
+  lambda_reconstruction: 1e-1
+  lambda_state_pred: 1e-1
+  lambda_obs_pred: 1e-1
+  koopman_param: "exponential"
+
+seed: 21
+print_freq: 5
+save_name: "dummy"

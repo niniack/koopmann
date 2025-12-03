@@ -14,7 +14,7 @@ def get_hf_llm(
     quantize: bool = False,
     untrained: bool = False,
     device: str = "cuda",
-    dtype: torch.tensor.dtype = torch.bfloat16,
+    dtype=torch.bfloat16,
 ):
     """
     Get LLM and tokenizer from HF in bf16.
@@ -48,12 +48,9 @@ def get_hf_llm(
 
     else:
         quantization_config = None
-        torch_dtype = None
 
         if quantize:
             quantization_config = BitsAndBytesConfig(load_in_8bit=True)
-        else:
-            torch_dtype = dtype
 
         model = AutoModelForCausalLM.from_pretrained(
             hf_name,
@@ -62,7 +59,7 @@ def get_hf_llm(
             cache_dir=cache_dir,
             device_map=device,
             attn_implementation="eager",
-            torch_dtype=torch_dtype,
+            dtype=dtype,
         )
 
     return model, tokenizer

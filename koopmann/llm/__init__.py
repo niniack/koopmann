@@ -1,4 +1,5 @@
-from model import *
+from .extract_hs import *
+from .model import *
 
 HF_LLM_DICT = {
     # Gemma

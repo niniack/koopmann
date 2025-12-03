@@ -247,7 +247,6 @@ class DecompExponentialKoopmanAutencoder(KoopmanAutoencoder):
         batchnorm: bool = False,
         nonlinearity: str = "leaky_relu",
         use_eigeninit: Optional[bool] = False,
-        **kwargs,
     ):
         super().__init__(
             k_steps,

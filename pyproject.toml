@@ -35,6 +35,7 @@ dependencies = [
     "python-dotenv>=1.2.1",
     "seaborn>=0.13.2",
     "latex>=0.7.0",
+    "transformer-lens>=2.15.4",
 ]
 
 [dependency-groups]

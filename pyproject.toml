@@ -10,11 +10,11 @@ package-mode = true
 python = ">=3.10,<3.13"
 torch = [
     # { version = "2.1.0", markers = "sys_platform == 'darwin'" },
-    { version = ">=2.1.0", source = "pytorch_cuda", markers = "sys_platform == 'linux'" }
+    { version = ">=2.1.0", source = "pytorch_cpu", markers = "sys_platform == 'linux'" }
 ]
 torchvision = [
     # { version = "*", platform="darwin"},
-    { version = "*", source = "pytorch_cuda", markers = "sys_platform == 'linux'" }
+    { version = "*", source = "pytorch_cpu", markers = "sys_platform == 'linux'" }
 ]
 fire = "^0.7.0"
 safetensors = "^0.4.5"
@@ -43,10 +43,12 @@ click = "^8.1.8"
 torchviz = "^0.0.3"
 ipykernel = "*"
 deprecated = "^1.2.18"
-plotly = "5.24.1"
+plotly = ">=6.1.1"
 scikit-tda = "^1.1.1"
 giotto-ph = "^0.2.4"
 requests = ">=2.27"
+panel = "^1.7.4"
+kaleido = "^1.0.0"
 
 [[tool.poetry.source]]
 name = "pytorch_cpu"

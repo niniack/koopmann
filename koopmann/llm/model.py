@@ -13,7 +13,7 @@ def get_hf_llm(
     cache_dir: str,
     quantize: bool = False,
     untrained: bool = False,
-    device: str = "cuda",
+    device: str | torch.device = "cuda",
     dtype=torch.bfloat16,
 ):
     """

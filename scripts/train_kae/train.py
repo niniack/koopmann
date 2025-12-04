@@ -1,16 +1,15 @@
 import os
-from pathlib import Path
-from typing import Optional, Union
+from pprint import pformat
 
 import fire
 import torch
-import wandb
 from dotenv import load_dotenv
 from utils import build_autoencoder
 
 from koopmann.llm import extract_hidden_states_from_hf, get_hf_llm
+from koopmann.log import logger
 from koopmann.utils import get_device
-from scripts.train_kae.config_def import Config
+from scripts.train_kae.config_def import Config as ConfigDef
 from scripts.train_kae.utils import setup_config
 
 load_dotenv("../.env")
@@ -21,20 +20,24 @@ def train_one_epoch(model, autoencoder, act_dict, device, config, epoch, optimiz
     pass
 
 
-def main(config_path_or_obj: Optional[Union[Path, str, Config]] = None):
+def main(config_path_or_obj: str):
     """Main function to train the autoencoder."""
 
-    # Dummy config
-    config = setup_config(config_path_or_obj, Config)
-
-    # Setup
+    ### CONFIG ###
     device = get_device()
+    config = setup_config(config_path_or_obj, ConfigDef)
+    if config.verbose:
+        logger.info(pformat(config.model_dump()))
 
-    # Load model and create autoencoder
+    # Load host model
+    if HF_HOME is None:
+        raise RuntimeError("HF_HOME is not set; cannot load HuggingFace model.")
     hf_model, hf_tokenizer = get_hf_llm(
         hf_name=config.host_model.hf_name, cache_dir=HF_HOME, device=device
     )
     hf_model.eval()
+
+    # Load autoencoder
     autoencoder = build_autoencoder(config=config, device=device)
     autoencoder.summary()
 
@@ -97,4 +100,5 @@ def main(config_path_or_obj: Optional[Union[Path, str, Config]] = None):
 if __name__ == "__main__":
     # For debugging
     torch.set_printoptions(precision=4)
+
     fire.Fire(main)

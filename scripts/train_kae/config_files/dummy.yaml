@@ -19,12 +19,14 @@ autoencoder:
   ae_dim: 1_000
   hidden_config: [800]
   ae_nonlinearity: "leaky_relu"
+  bias: True
   batchnorm: False
   lambda_reconstruction: 1e-1
   lambda_state_pred: 1e-1
   lambda_obs_pred: 1e-1
   koopman_param: "exponential"
 
+verbose: True
 seed: 21
 print_freq: 5
 save_name: "dummy"

@@ -17,8 +17,6 @@ class Layer(nn.Module, ABC, Hookable):
         self,
         in_channels: int,
         out_channels: int,
-        bias: bool,
-        batchnorm: bool,
         nonlinearity: Optional[str],
     ):
         nn.Module.__init__(self)  # Initialize nn.Module
@@ -62,14 +60,12 @@ class LinearLayer(Layer):
         in_channels: int,
         out_channels: int,
         bias: bool = True,
-        batchnorm: bool = False,
+        batchnorm: bool | None = False,
         nonlinearity: Optional[str] = "relu",
     ):
         super().__init__(
             in_channels=in_channels,
             out_channels=out_channels,
-            bias=bias,
-            batchnorm=batchnorm,
             nonlinearity=nonlinearity,
         )
 
@@ -118,8 +114,6 @@ class Conv2DLayer(Layer):
         super().__init__(
             in_channels=in_channels,
             out_channels=out_channels,
-            bias=bias,
-            batchnorm=batchnorm,
             nonlinearity=nonlinearity,
         )
         self.kernel_size = kernel_size
@@ -173,8 +167,6 @@ class Conv1DLayer(Layer):
         super().__init__(
             in_channels=in_channels,
             out_channels=out_channels,
-            bias=bias,
-            batchnorm=batchnorm,
             nonlinearity=nonlinearity,
         )
         self.kernel_size = kernel_size

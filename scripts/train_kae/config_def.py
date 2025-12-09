@@ -1,34 +1,20 @@
-from enum import Enum
 from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict, NonNegativeFloat, NonNegativeInt, PositiveInt
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    NonNegativeInt,
+    PositiveInt,
+)
 
-from scripts.common_config_def import OptimConfig, WandBConfig
+from scripts.common_config_def import OptimConfig, WandBConfig, AutoencoderConfig
 
 
 class HostModelConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     hf_name: str
-
-
-class KoopmanParam(str, Enum):
-    exponential = "exponential"
-
-
-# Autoencoder configuration
-class AutoencoderConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    k_steps: PositiveInt  # Observable space steps
-    in_features: PositiveInt  # Input dimension
-    ae_dim: PositiveInt  # Observable dimension
-    hidden_config: List[PositiveInt]  # Encoder/decoder arch.
-    lambda_reconstruction: NonNegativeFloat
-    lambda_obs_pred: NonNegativeFloat
-    lambda_state_pred: NonNegativeFloat
-    bias: bool = True
-    batchnorm: bool = False
-    koopman_param: Optional[KoopmanParam] = None
-    ae_nonlinearity: Optional[str] = None
+    layer_start: NonNegativeInt
+    layer_end: NonNegativeInt
 
 
 # Main Config class

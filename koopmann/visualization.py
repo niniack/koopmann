@@ -29,7 +29,10 @@ def plot_eigenvalues(
 
     # Create the figure and axes
     fig, axes = plt.subplots(
-        num_rows, num_cols, figsize=(tile_size * num_cols, tile_size * num_rows), squeeze=False
+        num_rows,
+        num_cols,
+        figsize=(tile_size * num_cols, tile_size * num_rows),
+        squeeze=False,
     )
 
     # Flatten the axes for easier indexing
@@ -42,16 +45,14 @@ def plot_eigenvalues(
         ax.set_title(rf"$k={key[0]}$, $dim={key[1]}$", fontsize=12)
 
         # Plot the unit circle
-        unit_circle = plt.Circle(
-            (0, 0), 1, color=aesthetics.SeabornColors.blue, fill=False, linestyle="--"
-        )
+        unit_circle = plt.Circle((0, 0), 1, fill=False, linestyle="--")
         ax.add_artist(unit_circle)
 
         # Plot the eigenvalues with reduced alpha for transparency
         sns.scatterplot(
             x=eigenvalues.real.cpu().detach().numpy(),
             y=eigenvalues.imag.cpu().detach().numpy(),
-            color=aesthetics.SeabornColors.orange,
+            # color=aesthetics.SeabornColors.orange,
             edgecolor=None,
             s=30,
             marker="o",
@@ -127,7 +128,8 @@ def plot_decision_boundary(
         xx,
         yy,
         y_pred,
-        levels=np.arange(len(labels) + 1) - 0.5,  # Adjust levels for proper class separation
+        levels=np.arange(len(labels) + 1)
+        - 0.5,  # Adjust levels for proper class separation
         colors=colors,
         alpha=0.5,
     )

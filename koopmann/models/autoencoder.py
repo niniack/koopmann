@@ -17,8 +17,12 @@ from koopmann.models.base import BaseTorchModel
 from koopmann.models.layers import LinearLayer
 from koopmann.models.utils import eigeninit
 
-VanillaAutoencoderResult = namedtuple("VanillaAutoencoderResult", "latent reconstruction")
-KoopmanAutoencoderResult = namedtuple("KoopmanAutoencoderResult", "predictions reconstruction")
+VanillaAutoencoderResult = namedtuple(
+    "VanillaAutoencoderResult", "latent reconstruction"
+)
+KoopmanAutoencoderResult = namedtuple(
+    "KoopmanAutoencoderResult", "predictions reconstruction"
+)
 
 
 ### STANDARD AUTOENCODER
@@ -58,7 +62,9 @@ class Autoencoder(BaseTorchModel):
         else:
             dims_list = [in_features, latent_features]
             dims_list = dims_list[:1] + hidden_config + dims_list[1:]
-            channel_dims = [(dims_list[i - 1], dims_list[i]) for i in range(1, len(dims_list))]
+            channel_dims = [
+                (dims_list[i - 1], dims_list[i]) for i in range(1, len(dims_list))
+            ]
 
         # Build components
         encoder = self._build_encoder(channel_dims)
@@ -77,7 +83,9 @@ class Autoencoder(BaseTorchModel):
                 out_channels=channel_dims[i][1],
                 bias=self.bias,
                 batchnorm=self.batchnorm if (i != len(channel_dims) - 1) else None,
-                nonlinearity=self.nonlinearity if (i != len(channel_dims) - 1) else None,
+                nonlinearity=self.nonlinearity
+                if (i != len(channel_dims) - 1)
+                else None,
             )
 
             encoder_layer.apply(LinearLayer.init_weights)
@@ -184,12 +192,21 @@ class KoopmanAutoencoder(Autoencoder):
     def koopman_weights(self):
         return self.components.koopman_matrix.components.linear.weight
 
-    def koopman_forward(self, observable, k_steps):
+    def koopman_forward(self, observable, k_steps=None):
+        if k_steps is None:
+            k_steps = self.k_steps
         # NOTE: this K is transposed because of
         # how torch handles matrix multiplication!
         return observable @ torch.linalg.matrix_power(self.koopman_weights.T, k_steps)
 
-    def forward(self, x: float, intermediate=False, k=None):
+    def forward(
+        self,
+        x: torch.Tensor,
+        intermediate: bool = False,
+        k: int | None = None,
+    ) -> KoopmanAutoencoderResult:
+        """Forward method for koopman autoencoder."""
+
         phi_x = self.encode(x)
         x_recons = self.decode(phi_x)
 
@@ -263,7 +280,7 @@ class DecompExponentialKoopmanAutencoder(KoopmanAutoencoder):
         # K is (weirdly) parameterized as V^-1 @ D @ V
         # Following convention, we apply x @ K.T
         # K.T = V.T @ D @ V^-1.T
-        # The benefit of this is that entering the eignespace does not require computing an inverse.
+        # The benefit of this is that entering the eigenspace does not require computing an inverse.
         self._V = nn.Linear(latent_features, latent_features, bias=False)
         nn.init.xavier_normal_(self._V.weight)
         self._D = nn.Parameter(torch.ones(latent_features))
@@ -276,7 +293,9 @@ class DecompExponentialKoopmanAutencoder(KoopmanAutoencoder):
             def forward(self, x):
                 return self.func(x)
 
-        self.components.koopman_matrix = nn.Sequential(Lambda(lambda x: x @ self.koopman_weights.T))
+        self.components.koopman_matrix = nn.Sequential(
+            Lambda(lambda x: x @ self.koopman_weights.T)
+        )
 
     @property
     def V(self):
@@ -284,7 +303,7 @@ class DecompExponentialKoopmanAutencoder(KoopmanAutoencoder):
 
     @property
     def V_inv(self):
-        eye = torch.eye(self.V.shape[0], device=self.V.device)
+        eye = torch.eye(self.V.shape[0], device=self.V.device, dtype=self.V.dtype)
         return torch.linalg.solve(self.V, eye)
         # return torch.linalg.lstsq(self.V, eye).solution
 
@@ -296,8 +315,15 @@ class DecompExponentialKoopmanAutencoder(KoopmanAutoencoder):
     def koopman_weights(self):
         return self.V_inv @ self.D_exp @ self.V
 
-    def koopman_forward(self, observable, k_steps):
-        return observable @ self.V.T @ torch.linalg.matrix_power(self.D_exp, k_steps) @ self.V_inv.T
+    def koopman_forward(self, observable, k_steps=None):
+        if k_steps is None:
+            k_steps = self.k_steps
+        return (
+            observable
+            @ self.V.T
+            @ torch.linalg.matrix_power(self.D_exp, k_steps)
+            @ self.V_inv.T
+        )
 
     def koopman_eigenspace(self, observable):
         return observable @ self.V.T

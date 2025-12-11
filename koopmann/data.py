@@ -16,13 +16,15 @@ from torchvision.transforms import Lambda
 
 
 class DatasetConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=False, arbitrary_types_allowed=True)
+    model_config = ConfigDict(
+        extra="forbid", frozen=False, arbitrary_types_allowed=True
+    )
     dataset_name: Literal[
         "YinYangDataset",
         "YinYangNoDotsBinaryDataset",
         "YinYangBinaryDataset",
         "LotusRootDataset",
-        "SunflowerDataset",
+        "SunflowerDataset",  # old name for LotusRootDataset
         "TorusDataset",
         "MNISTDataset",
         "BinaryMNISTDataset",
@@ -161,7 +163,12 @@ class YinYangDataset(BaseYinYangDataset):
 
     def __init__(self, config: DatasetConfig, r_small=0.1, r_big=0.5, root=None):
         super().__init__(
-            config=config, binary=False, dots=True, r_small=r_small, r_big=r_big, root=None
+            config=config,
+            binary=False,
+            dots=True,
+            r_small=r_small,
+            r_big=r_big,
+            root=None,
         )
         self.out_features = 3
         self.in_features = 2
@@ -208,13 +215,20 @@ class YinYangBinaryDataset(BaseYinYangDataset):
 
 class LotusRootDataset(Dataset):
     def __init__(
-        self, config: DatasetConfig, r_inner=0.35, r_outer=1, num_small_circles=9, root=None
+        self,
+        config: DatasetConfig,
+        r_inner=0.35,
+        r_outer=1,
+        num_small_circles=9,
+        root=None,
     ):
         super().__init__()
         self.num_samples = config.num_samples
         self.r_inner = r_inner  # Radius of the central circle
         self.r_outer = r_outer  # Radius of the overall circle
-        self.num_small_circles = num_small_circles  # Number of small circles around the center
+        self.num_small_circles = (
+            num_small_circles  # Number of small circles around the center
+        )
         self.rng = np.random.RandomState(config.seed)
         self.features = []
         self.labels = []
@@ -424,7 +438,9 @@ class FashionMNISTDataset(datasets.FashionMNIST):
     ):
         self.transform = transform or self.default_transform
         train = True if config.split == "train" else False
-        super().__init__(root=config.root, train=train, download=True, transform=self.transform)
+        super().__init__(
+            root=config.root, train=train, download=True, transform=self.transform
+        )
         self.seed = seed
         self.config = config
         self.in_features = (1, 28, 28)
@@ -473,7 +489,9 @@ class CIFAR10Dataset(datasets.CIFAR10):
             self.transform = transform
         else:
             self.transform = self.train_transform if train else self.test_transform
-        super().__init__(root=root, train=train, download=True, transform=self.transform)
+        super().__init__(
+            root=root, train=train, download=True, transform=self.transform
+        )
         self.seed = seed
         self.config = config
         self.labels = self.targets

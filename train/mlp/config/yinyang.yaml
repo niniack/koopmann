@@ -1,0 +1,26 @@
+verbose: True
+seed: 22
+print_freq: 20
+save_name: "yinyang"
+
+train_data:
+    dataset_name: "YinYangDataset"
+    num_samples: 5_000
+    split: "train"
+    seed: 42
+
+model: 
+    bias: True
+    batchnorm: True
+    hidden_neurons: [10, 10, 10, 10, 10]
+
+optim:
+    num_epochs: 1000
+    learning_rate: 1e-3
+    weight_decay: 1e-2
+    batch_size: 256
+    type: "adamw"
+    scheduler: "cyclic" 
+
+wandb:
+    use_wandb: True

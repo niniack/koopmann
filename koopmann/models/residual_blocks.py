@@ -10,7 +10,7 @@ from torchvision.ops import stochastic_depth
 
 from koopmann.mixins.hookable import Hookable
 
-from .layers import Conv2DLayer, LinearLayer
+from .layers import LinearLayer
 from .utils import StringtoClassNonlinearity
 
 
@@ -71,7 +71,10 @@ class BaseResidualBlock(nn.Module, ABC, Hookable):
 
         # Apply stochastic depth
         branch_output = stochastic_depth(
-            branch_output, p=self.drop_prob, mode=self.stoch_mode, training=self.training
+            branch_output,
+            p=self.drop_prob,
+            mode=self.stoch_mode,
+            training=self.training,
         )
 
         out = identity + branch_output
@@ -131,84 +134,3 @@ class LinearResidualBlock(BaseResidualBlock):
         )
         fc2.apply(LinearLayer.init_weights)
         self.components["fc2"] = fc2
-
-
-class Conv2DResidualBlock(BaseResidualBlock):
-    """
-    Residual block for ConvResNet, consisting of two convolutional layers.
-    Handles changes in both spatial dimensions (via stride) and channel dimensions.
-    """
-
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        kernel_size: int = 3,
-        stride: int = 1,
-        bias: bool = False,
-        batchnorm: bool = True,
-        nonlinearity: str = "relu",
-        drop_prob: float = 0.0,
-        stoch_mode: str = "batch",
-    ):
-        super().__init__(
-            bias=bias,
-            batchnorm=batchnorm,
-            nonlinearity=nonlinearity,
-            in_channels=in_channels,
-            out_channels=out_channels,
-            drop_prob=drop_prob,
-            stoch_mode=stoch_mode,
-        )
-        self.kernel_size = kernel_size
-        self.stride = stride
-
-        # Determine if we need a projection shortcut (1x1 conv) for changing dimensions
-        self.downsample = None
-        if stride != 1 or in_channels != out_channels:
-            self.downsample = Conv2DLayer(
-                in_channels=in_channels,
-                out_channels=out_channels,
-                kernel_size=1,
-                stride=stride,
-                padding=0,
-                nonlinearity=None,
-                bias=False,
-                batchnorm=batchnorm,
-            )
-            self.downsample.apply(Conv2DLayer.init_weights)
-
-        # First convolutional layer
-        padding = kernel_size // 2  # Same padding
-        conv1 = Conv2DLayer(
-            in_channels=in_channels,
-            out_channels=out_channels,
-            kernel_size=kernel_size,
-            stride=stride,
-            padding=padding,
-            nonlinearity=nonlinearity,
-            bias=bias,
-            batchnorm=batchnorm,
-        )
-        conv1.apply(Conv2DLayer.init_weights)
-        self.components["conv1"] = conv1
-
-        # Second convolutional layer
-        conv2 = Conv2DLayer(
-            in_channels=out_channels,  # Input channels now match output of first conv
-            out_channels=out_channels,
-            kernel_size=kernel_size,
-            stride=1,  # Always stride 1 for the second conv
-            padding=padding,
-            nonlinearity=None,
-            bias=bias,
-            batchnorm=batchnorm,
-        )
-        conv2.apply(Conv2DLayer.init_weights)
-        self.components["conv2"] = conv2
-
-    def identity_block(self, x: Tensor) -> Tensor:
-        """Apply identity mapping with optional projection for dimension mismatch."""
-        if self.downsample is not None:
-            return self.downsample(x)
-        return x

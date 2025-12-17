@@ -1,7 +1,7 @@
 host_model: 
-  hf_name: "meta-llama/Llama-3.2-1B"
-  layer_start: 10
-  layer_end: 15
+  hf_name: "google/vit-base-patch16-224"
+  layer_start: 5
+  layer_end: 10
 
 optim:
   num_epochs: 1000
@@ -13,19 +13,19 @@ optim:
 wandb: 
   use_wandb: False
   entity: "nishantaswani"
-  project: "koopman_interp"
+  project: "new_koopmann"
 
 autoencoder:
   k_steps: 1
-  in_features: 2048
+  in_features: 768
   hidden_config: [1024]
-  ae_dim: 512
+  ae_dim: 1024
   ae_nonlinearity: "leaky_relu"
   bias: True
   batchnorm: True
-  lambda_reconstruction: 1e0
-  lambda_state_pred: 1e0
-  lambda_obs_pred: 1e0
+  lambda_reconstruction: 1e-1
+  lambda_state_pred: 1e-1
+  lambda_obs_pred: 1e-1
   koopman_param: "exponential"
 
 verbose: True

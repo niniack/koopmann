@@ -28,15 +28,16 @@ class DatasetConfig(BaseModel):
         "TorusDataset",
         "MNISTDataset",
         "BinaryMNISTDataset",
-        "CIFAR10Dataset",
         "FashionMNISTDataset",
+        "CIFAR10Dataset",
+        "ImagenetteDataset",
     ]
     num_samples: int
     split: str
+    root: str
     torch_transform: Callable | None = None
     seed: int | None = 42
     negative_label: bool = False
-    root: str = "/mnt/nishant/datasets/"
 
 
 def get_dataset_class(name: str) -> Dataset:
@@ -478,7 +479,6 @@ class CIFAR10Dataset(datasets.CIFAR10):
 
     def __init__(
         self,
-        root,  # Dataset location
         config=None,
         seed=42,
         transform=None,  # Torch transforms, uses default CIFAR-10 transform if None
@@ -490,7 +490,7 @@ class CIFAR10Dataset(datasets.CIFAR10):
         else:
             self.transform = self.train_transform if train else self.test_transform
         super().__init__(
-            root=root, train=train, download=True, transform=self.transform
+            root=config.root, train=train, download=True, transform=self.transform
         )
         self.seed = seed
         self.config = config
@@ -498,6 +498,44 @@ class CIFAR10Dataset(datasets.CIFAR10):
         self.mean = (0.4914, 0.4822, 0.4465)
         self.std = (0.2470, 0.2435, 0.2616)
         self.in_features = (3, 32, 32)  # CHW
+        self.out_features = 10
+
+    def name(self):
+        return "CIFAR10Dataset"
+
+
+class ImagenetteDataset(datasets.Imagenette):
+    """Simple wrapper around the Imagenette dataset with default configurations."""
+
+    # Hugging face processors should handle all transformations
+    train_transform = transforms.Compose([])
+
+    test_transform = transforms.Compose([])
+
+    def __init__(
+        self,
+        config=None,
+        seed=42,
+        transform=None,  # Torch transforms, uses default CIFAR-10 transform if None
+    ):
+        split = "train" if config.split == "train" else "val"
+
+        if transform:
+            self.transform = transform
+        else:
+            self.transform = (
+                self.train_transform if config.split == "train" else self.test_transform
+            )
+        super().__init__(
+            root=config.root,
+            split=split,
+            download=False,
+            transform=self.transform,
+        )
+        self.seed = seed
+        self.config = config
+        # self.labels = self.targets
+        self.in_features = (3, 224, 224)  # CHW
         self.out_features = 10
 
     def name(self):

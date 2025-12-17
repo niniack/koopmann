@@ -1,12 +1,9 @@
 __all__ = ["StringtoClassNonlinearity"]
 
-import json
-import os
 from enum import Enum
 
 import torch
-import torch.nn.functional as F
-from torch import device, nn
+from torch import nn
 
 
 class StringtoClassNonlinearity(Enum):
@@ -38,7 +35,9 @@ def eigeninit(weight: torch.Tensor, theta: float = 0.7) -> None:
     # Sample with slab-spike distribution
     num_unique = len(torch.unique(polar_mags, sorted=False))
     bernoulli_trials = torch.distributions.Bernoulli(theta).sample([num_unique])
-    uniform_trials = torch.distributions.Uniform(0, 1).sample([num_unique]) * (1 - bernoulli_trials)
+    uniform_trials = torch.distributions.Uniform(0, 1).sample([num_unique]) * (
+        1 - bernoulli_trials
+    )
     result_trials = bernoulli_trials + uniform_trials
 
     # Sample new magnitudes, while preserving conjugate pairs!
@@ -58,5 +57,9 @@ def eigeninit(weight: torch.Tensor, theta: float = 0.7) -> None:
     # Construct new weight matrix in-place
     with torch.no_grad():  # Precaution
         weight.copy_(
-            torch.real(eigenvectors @ torch.diag(new_eigenvalues) @ torch.linalg.inv(eigenvectors))
+            torch.real(
+                eigenvectors
+                @ torch.diag(new_eigenvalues)
+                @ torch.linalg.inv(eigenvectors)
+            )
         )

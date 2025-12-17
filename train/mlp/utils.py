@@ -1,7 +1,7 @@
 import torch
-import wandb
 from torch.utils.data import DataLoader
 
+import wandb
 from koopmann.data import get_dataset_class
 
 

@@ -507,17 +507,10 @@ class CIFAR10Dataset(datasets.CIFAR10):
 class ImagenetteDataset(datasets.Imagenette):
     """Simple wrapper around the Imagenette dataset with default configurations."""
 
-    # Hugging face processors should handle all transformations
     train_transform = transforms.Compose([])
-
     test_transform = transforms.Compose([])
 
-    def __init__(
-        self,
-        config=None,
-        seed=42,
-        transform=None,  # Torch transforms, uses default CIFAR-10 transform if None
-    ):
+    def __init__(self, config=None, seed=42, transform=None):
         split = "train" if config.split == "train" else "val"
 
         if transform:
@@ -527,16 +520,12 @@ class ImagenetteDataset(datasets.Imagenette):
                 self.train_transform if config.split == "train" else self.test_transform
             )
         super().__init__(
-            root=config.root,
-            split=split,
-            download=False,
-            transform=self.transform,
+            root=config.root, split=split, download=False, transform=self.transform
         )
         self.seed = seed
         self.config = config
-        # self.labels = self.targets
         self.in_features = (3, 224, 224)  # CHW
         self.out_features = 10
 
     def name(self):
-        return "CIFAR10Dataset"
+        return "Imagenette"

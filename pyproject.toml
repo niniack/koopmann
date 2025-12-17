@@ -43,6 +43,7 @@ dependencies = [
 
 [project.scripts]
 train-mlp = "train.mlp.main:fire_main"
+dino-kae = "train.dino_kae.main:fire_main"
 
 [dependency-groups]
 test = [
@@ -98,4 +99,3 @@ target-version = "py311"
 
 [tool.ruff.lint]
 ignore = ["F722"]
-# unfixable = ["F401"] # Unused mports

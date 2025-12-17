@@ -7,12 +7,12 @@ from pathlib import Path
 from typing import Type, TypeVar
 
 import numpy as np
-import wandb
 import yaml
 from pydantic import BaseModel
 from torch import nn, optim
 from torch.optim.lr_scheduler import CyclicLR
 
+import wandb
 from koopmann.models import ResMLP
 from koopmann.utils import set_seed
 from train.common_config_def import EnvSettings
@@ -98,7 +98,7 @@ def get_lr_schedule(lr_schedule_type, n_epochs, lr_max, optimizer):
 
 # Model
 def get_model(config, dataset):
-    """Get and load models for training."""
+    """Get and load models."""
     model = ResMLP(
         in_features=np.prod(dataset.in_features),
         out_features=dataset.out_features,

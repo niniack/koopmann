@@ -5,13 +5,13 @@ from typing import Any, TypeVar
 import torch
 from dotenv import load_dotenv
 from pydantic import BaseModel
+from scripts.train_kae.config_def import KoopmanParam
 from torch import optim
 
 from koopmann.models import (
     KoopmanAutoencoder,
     ParamExponentialKoopmanAutencoder,
 )
-from scripts.train_kae.config_def import KoopmanParam
 
 load_dotenv(Path(__file__).parent.parent.parent / ".env")
 TConfig = TypeVar("TConfig", bound=BaseModel)

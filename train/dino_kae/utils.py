@@ -11,6 +11,7 @@ from koopmann.models import (
     KoopmanAutoencoder,
     ParamExponentialKoopmanAutencoder,
 )
+from koopmann.shapes import Processor
 from train.dino_kae.config_def import KoopmanParam
 
 load_dotenv(Path(__file__).parent.parent.parent / ".env")
@@ -46,6 +47,10 @@ def build_hidden_states(hf_model, image_dataloader, config, device="cuda"):
     xs_start = torch.cat(xs_start, dim=0)
     xs_end = torch.cat(xs_end, dim=0)
     ys = torch.cat(ys, dim=0)
+
+    if config.host_model.use_processor:
+        processor = Processor()
+        xs_start, xs_end = processor.fit_transform(xs_start, xs_end)
 
     hidden_dataset = TensorDataset(xs_start, xs_end, ys)
 

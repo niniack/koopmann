@@ -19,6 +19,7 @@ class HostModelConfig(BaseModel):
     token_idx: NonNegativeInt
     layer_start: NonNegativeInt
     layer_end: NonNegativeInt
+    use_processor: bool = False
 
 
 # Autoencoder parameterization

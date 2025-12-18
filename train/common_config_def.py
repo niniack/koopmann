@@ -11,7 +11,6 @@ from pydantic import (
     NonNegativeInt,
     PositiveFloat,
 )
-
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -36,6 +35,7 @@ class WandBConfig(BaseModel):
 class OptimParam(str, Enum):
     adamw = "adamw"
     sgd = "sgd"
+    adam = "adam"
 
 
 # Scheduler

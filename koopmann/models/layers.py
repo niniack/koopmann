@@ -79,6 +79,7 @@ class LinearLayer(Layer):
         # Batchnorm (optional)
         if batchnorm:
             self.components["batchnorm"] = nn.BatchNorm1d(out_channels)
+            # self.components["batchnorm"] = nn.LayerNorm(out_channels)
 
         # Nonlinearity (optional)
         if nonlinearity is not None:

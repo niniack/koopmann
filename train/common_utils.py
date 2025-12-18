@@ -22,11 +22,17 @@ TConfig = TypeVar("TConfig", bound=BaseModel)
 
 # Optimization
 def get_optimizer(config, model):
-    param_groups = separate_param_groups(model, config.optim.weight_decay)
+    # param_groups = separate_param_groups(model, config.optim.weight_decay)
+    param_groups = model.parameters()
 
     opt_type = config.optim.type.value.lower()
     if opt_type == "adamw":
         return optim.AdamW(
+            params=param_groups,
+            lr=config.optim.learning_rate,
+        )
+    elif opt_type == "adam":
+        return optim.Adam(
             params=param_groups,
             lr=config.optim.learning_rate,
         )
@@ -37,7 +43,7 @@ def get_optimizer(config, model):
             momentum=0.9,
         )
     else:
-        raise NotImplementedError("Pick either 'sgd' or 'adamw'")
+        raise NotImplementedError("Unknow optim")
 
 
 def separate_param_groups(model, weight_decay):

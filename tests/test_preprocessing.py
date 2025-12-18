@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from koopmann.shape_metrics import Processor
+from koopmann._old_shape_metrics import Processor
 
 
 @pytest.mark.parametrize("alpha", [0.1, 0.2, 0.5, 0.8, 1.0])

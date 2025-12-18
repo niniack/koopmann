@@ -12,15 +12,16 @@ train_data:
 host_model: 
   hf_name: "facebook/dinov3-vits16-pretrain-lvd1689m"
   token_idx: 0
-  layer_start: 0
+  layer_start: 11
   layer_end: 12
+  use_processor: True
 
 optim:
   num_epochs: 1_000
-  learning_rate: 3e-4
+  learning_rate: 1e-3
   weight_decay: 1e-4
-  batch_size: 64
-  type: "adamw"
+  batch_size: 1_024
+  type: "adam"
   scheduler: null
 
 wandb:
@@ -29,7 +30,7 @@ wandb:
 autoencoder:
   k_steps: 1
   in_features: 384
-  hidden_config: [768]
+  hidden_config: [400, 500, 768]
   latent_features: 768
   koopman_param: "vanilla"
   bias: True

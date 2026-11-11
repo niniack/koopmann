@@ -10,6 +10,8 @@
 #SBATCH -o /home/nsa325/work/koopmann/logs/%x_%j.out
 
 cd /home/nsa325/work/koopmann/temp
+# The login shell sets its own HF_HOME, which sbatch copies and .env does not override
+export HF_HOME=/scratch/nsa325/huggingface
 nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv
 echo "internet: $(curl -s -m 10 -o /dev/null -w '%{http_code}' https://api.wandb.ai || echo none)"
 HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 uv run python hpc_check.py 16

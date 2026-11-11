@@ -33,6 +33,7 @@ dependencies = [
     "plotly==5.24.1",
     "giotto-ph>=0.2.4,<0.3",
     "python-dotenv>=1.2.1",
+    "datasets>=4.4.1,<5",
 ]
 
 [dependency-groups]
@@ -47,6 +48,8 @@ dev = [
     "seaborn",
     "open-clip-torch>=4.2.1",
     "pyarrow>=18,<22",
+    "nbclient>=0.10",
+    "nbconvert>=7",
 ]
 
 [tool.uv]

@@ -170,7 +170,7 @@ def main(
     views: int = 2,
     mixup: bool = True,
     precision: str = "bf16",
-    workers: int = 16,
+    workers: int = 28,
     lr: float = 0.0075,
     adam_lr: float = 0.00075,
     top_k: int = 256,
@@ -220,11 +220,11 @@ def main(
     # NOTE: A resumed run must not replay the image order of the run's first steps
     set_seed(seed + step)
 
-    loader = DataLoader(base.Views("train", teacher, views), batch_size // views, shuffle=True, drop_last=True, num_workers=workers, persistent_workers=True)
+    loader = DataLoader(base.Views("train", teacher, views), batch_size // views, shuffle=True, drop_last=True, num_workers=workers, persistent_workers=True, pin_memory=True)
     start = time.time()
     while step < total_steps:
         for images, labels in loader:
-            images = images.flatten(0, 1).to(device).float()
+            images = images.flatten(0, 1).to(device, non_blocking=True).float()
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=precision == "bf16"):
                 states, patches = teacher(mix(images, views) if mixup else images)
             states = (states[..., :width].float() - mean) / std

@@ -1,13 +1,14 @@
 #!/bin/bash
 # TEMP: the long baseline run (see cls_train.py): no control, additive control and the MLP, all with mixup.
-# Submit from a login shell: sbatch temp/baseline.sh. Submitting it again carries on from the last report.
+# 100 epochs at about 0.45 s per step are about 32 hours. If the time limit cuts it short, submit it again: it carries
+# on from the last report. Submit from a login shell: sbatch temp/baseline.sh
 #SBATCH -J kae_base
 #SBATCH -p nvidia
 #SBATCH -q nvidia
 #SBATCH --gres=gpu:a100:1
-#SBATCH -c 32
-#SBATCH --mem=64G
-#SBATCH -t 2-00:00:00
+#SBATCH -c 30
+#SBATCH --mem=40G
+#SBATCH -t 1-16:00:00
 #SBATCH --requeue
 #SBATCH --open-mode=append
 #SBATCH -o /home/nsa325/work/koopmann/logs/%x_%j.out

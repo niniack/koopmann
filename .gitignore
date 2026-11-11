@@ -13,3 +13,6 @@ wandb/
 *.jpeg
 jobs/
 .env
+# Model weights kept inside the repo folder on the HPC
+weights_cache/
+second_analysis/cache/

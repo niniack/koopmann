@@ -1,0 +1,12 @@
+# Only code and notes are tracked; everything else here is temporary data
+*
+!*/
+!*.py
+!*.sh
+!*.md
+!.gitignore
+
+# Not ours (a library install and downloaded reference code); copied on the HPC as data
+tf_target/
+splice_ref/
+hf_readme/

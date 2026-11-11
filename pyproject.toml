@@ -6,7 +6,7 @@ authors = [{ name = "Nishant Aswani", email = "nsa325@nyu.edu" }]
 requires-python = ">=3.10,<3.13"
 readme = "README.md"
 dependencies = [
-    "torch",
+    "torch>=2.9",
     "torchvision",
     "fire>=0.7.0,<0.8",
     "safetensors>=0.4.5,<0.5",
@@ -45,6 +45,8 @@ dev = [
     "ipykernel>=6.29.5,<7",
     "matplotlib",
     "seaborn",
+    "open-clip-torch>=4.2.1",
+    "pyarrow>=18,<22",
 ]
 
 [tool.uv]
@@ -63,7 +65,7 @@ explicit = true
 
 [[tool.uv.index]]
 name = "pytorch_cuda"
-url = "https://download.pytorch.org/whl/cu121"
+url = "https://download.pytorch.org/whl/cu130"
 explicit = true
 
 [tool.uv.sources]

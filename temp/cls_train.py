@@ -5,24 +5,34 @@ The one plan: a KAE whose state is the CLS token alone, with the block-6 patch t
 
 Everything is control_train.py's (online crops, real CLIP as teacher, control encoder, losses, evaluation), except:
   1. The state is the CLS token (768 numbers). The patch mean and std are gone from the state.
-  2. Three arms train on the same stream of batches:
+  2. Several arms train on the same stream of batches:
+       none       the KAE with no control: z12 = λ·z6
        add        the KAE above
        add_real   the same with the real-start rule: at block 6 a mode is one real number (size only, no phase)
        mlp        baseline, not a KAE: no TopK and an MLP in place of the eigenvalues (train.MlpKoopmanAutoencoder),
                   with the same control added. It shows what the eigenvalue step and the sparsity cost in accuracy.
   3. Optional penalty on the control (arms `real_w*`): the loss gains `control_weight` times the control's share of z12's
      squared size. Without it the control ends up as over 90% of z12, and λ·z6 as under 10%.
+  4. Mixup as in Beyer et al. (arXiv 2106.05237): crops are blended before real CLIP sees them, so the target is real
+     CLIP's state on the blended image. Validation images are never blended.
+  5. `precision`: `bf16` runs real CLIP in bf16 and the KAEs with TF32 matrix products, `tf32` uses TF32 for both, and
+     `fp32` is the arithmetic of the runs before the move to the HPC.
+  6. A run can be stopped and started again. Every report writes `<name>_latest.pt` (all arms), and the same command
+     carries on from it. Each arm's best weights are in `<name>_<arm>.safetensors`, and a copy of its weights is kept
+     every `snapshot_every` steps.
 No weight decay.
 
-Usage: cls_train.py --name=cls --total_steps=30000
+Usage: cls_train.py --name=base --total_steps=250000
 """
 
 import os
+import time
 from pathlib import Path
 
 import fire
 import torch
 import wandb
+from safetensors.torch import save_file
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 
@@ -30,7 +40,7 @@ import control_train as base
 from control_train import train
 from koopmann.utils import get_device, set_seed
 
-ARMS = {"add": {"real_start": False}, "add_real": {"real_start": True}, "mlp": None,
+ARMS = {"none": {"control": "none"}, "add": {"real_start": False}, "add_real": {"real_start": True}, "mlp": None,
         "real_w01": {"real_start": True, "control_weight": 0.1}, "real_w03": {"real_start": True, "control_weight": 0.3}, "real_w1": {"real_start": True, "control_weight": 1.0}}  # fmt: skip
 
 
@@ -60,30 +70,49 @@ class MlpControl(train.MlpKoopmanAutoencoder):
 
 
 class Arm(base.Variant):
-    """One model in training. Only the construction differs from control_train's Variant."""
+    """One model in training. The construction, the penalty and the resuming differ from control_train's Variant."""
 
-    def __init__(self, name, arm, config, kwargs, stats, total_steps, lr, adam_lr, device, offline):
+    def __init__(self, name, arm, config, kwargs, stats, total_steps, lr, adam_lr, device, offline, saved):
         self.name = name
         settings = dict(ARMS[arm] or {})
         self.control_weight = settings.pop("control_weight", 0.0)
+        control = settings.pop("control", "add")
         if ARMS[arm] is None:
             self.model = MlpControl(hidden=kwargs["hidden_config"][0], **{k: v for k, v in kwargs.items() if k not in ("top_k", "shared_modes")}).to(device)
         else:
-            self.model = ShareKae("add", **kwargs, **settings).to(device)
+            self.model = ShareKae(control, **kwargs, **settings).to(device)
         self.optimizers = train.get_optimizers(self.model, lr, adam_lr, 0.0)
         self.schedulers = [LambdaLR(opt, lambda step: 1 - step / total_steps) for opt in self.optimizers]
         self.totals, self.best = torch.zeros(len(base.LAMBDAS)), -1.0
         self.path = Path(os.getenv("WEIGHTS_CACHE")) / "tokae" / f"{name}.safetensors"
-        torch.save({**stats, "arm": arm, "control": "add", **(ARMS[arm] or {})}, self.path.with_name(f"{name}_stats.pt"))
+        torch.save({**stats, "arm": arm, "control": control, **(ARMS[arm] or {})}, self.path.with_name(f"{name}_stats.pt"))
+        if saved:
+            self.model.load_state_dict(saved["model"])
+            # NOTE: Loaded after the schedulers are built: a new scheduler sets the optimizer's rate back to its start
+            for part, state in zip(self.optimizers + self.schedulers, saved["optimizers"]):
+                part.load_state_dict(state)
+            self.best = saved["best"]
         self.run = wandb.init(
             entity=os.getenv("WANDB_ENTITY"),
             project="tokae",
             name=name,
+            id=saved["wandb_id"] if saved else None,
+            resume="allow",
             mode="offline" if offline else "online",
             reinit="create_new",  # Several runs in one process
-            tags=[config["encoder"], "imagenet", "cls", "start_to_end", "online_views", "control_add", arm],
+            tags=[config["encoder"], "imagenet", "cls", "start_to_end", "online_views", f"control_{control}", arm] + ["mixup"] * config["mixup"],
             config={**config, "arm": arm, "parameters": sum(p.numel() for p in self.model.parameters())},
         )
+
+    def state(self):
+        """Everything a stopped run needs to carry on."""
+
+        return {
+            "model": self.model.state_dict(),
+            "optimizers": [part.state_dict() for part in self.optimizers + self.schedulers],
+            "best": self.best,
+            "wandb_id": self.run.id,
+        }
 
     def train_step(self, states, patches, head):
         """control_train's step, plus the penalty on the control's share."""
@@ -110,16 +139,38 @@ class Arm(base.Variant):
             print(f"step {step} | {self.name}: control share of z12 on validation {self.model.control_share.item():.3f}", flush=True)
 
 
+def mix(images, views):
+    """
+    Mixup as in Beyer et al.: every crop is blended with the same crop of the next image in the batch.
+    NOTE: A crop's own weight is uniform in [0.5, 1], so its label stays the main one. Over all pairs, the blends are
+    those of a weight uniform in [0, 1]. The training-batch accuracy is against the main label, so it reads low.
+    """
+
+    weight = 0.5 + 0.5 * torch.rand(len(images), 1, 1, 1, device=images.device)
+
+    return weight * images + (1 - weight) * images.roll(-views, dims=0)
+
+
+def save(models, step, latest):
+    """Writes the resume point of all arms. NOTE: Under another name first, so a job killed mid-write leaves the old one whole."""
+
+    torch.save({"step": step, "arms": {model.name: model.state() for model in models}}, latest.with_suffix(".tmp"))
+    latest.with_suffix(".tmp").rename(latest)
+
+
 def main(
     name: str = "cls",
-    arms: tuple = ("add", "add_real", "mlp"),
+    arms: tuple = ("none", "add", "mlp"),
     encoder: str = "ViT-B-32",
     reference: str = "im_iso_2x4k",
     total_steps: int = 30_000,
     report_every: int = 2_500,
+    snapshot_every: int = 12_500,
     batch_size: int = 1_024,
     views: int = 2,
-    workers: int = 40,
+    mixup: bool = True,
+    precision: str = "bf16",
+    workers: int = 16,
     lr: float = 0.0075,
     adam_lr: float = 0.00075,
     top_k: int = 256,
@@ -129,11 +180,15 @@ def main(
     seed: int = 0,
     smoke: bool = False,
 ):
-    """Trains the arms on the same stream of fresh crops. `smoke` is a short code check, with wandb offline."""
+    """
+    Trains the arms on the same stream of fresh crops. `smoke` is a short code check, with wandb offline.
+    NOTE: 2,500 steps of 512 images are one pass over ImageNet, so the defaults report every epoch and keep every fifth.
+    """
 
     config = dict(locals())
     set_seed(seed)
     device = get_device()
+    torch.backends.cuda.matmul.allow_tf32 = precision != "fp32"
     teacher = base.Teacher(encoder, device)
     width = teacher.model.visual.ln_post.normalized_shape[0]
 
@@ -157,14 +212,22 @@ def main(
         "batchnorm": False,
         "nonlinearity": "leaky_relu",
     }
-    models = [Arm(f"{name}_{arm}", arm, config, kwargs, stats, total_steps, lr, adam_lr, device, smoke) for arm in arms]
+    latest = Path(os.getenv("WEIGHTS_CACHE")) / "tokae" / f"{name}_latest.pt"
+    saved = torch.load(latest, map_location=device) if latest.exists() else {"step": 0, "arms": {}}
+    models = [Arm(f"{name}_{arm}", arm, config, kwargs, stats, total_steps, lr, adam_lr, device, smoke, saved["arms"].get(f"{name}_{arm}")) for arm in arms]
+    step = saved["step"]
+    print(f"starting at step {step} of {total_steps}", flush=True)
+    # NOTE: A resumed run must not replay the image order of the run's first steps
+    set_seed(seed + step)
 
     loader = DataLoader(base.Views("train", teacher, views), batch_size // views, shuffle=True, drop_last=True, num_workers=workers, persistent_workers=True)
-    step = 0
+    start = time.time()
     while step < total_steps:
         for images, labels in loader:
-            states, patches = teacher(images.flatten(0, 1).to(device))
-            states = (states[..., :width] - mean) / std
+            images = images.flatten(0, 1).to(device).float()
+            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=precision == "bf16"):
+                states, patches = teacher(mix(images, views) if mixup else images)
+            states = (states[..., :width].float() - mean) / std
             for model in models:
                 model.train_step(states, patches, head)
             step += 1
@@ -173,6 +236,11 @@ def main(
                 batch = (states, patches, labels.repeat_interleave(views).to(device))
                 for model in models:
                     model.report(step, report_every, batch, val, head)
+                    if step % snapshot_every == 0 or step == total_steps:
+                        save_file(model.model.state_dict(), model.path.with_name(f"{model.name}_step{step}.safetensors"))
+                save(models, step, latest)
+                print(f"step {step} | {(time.time() - start) / report_every:.3f} s per step, GPU memory {torch.cuda.max_memory_allocated() / 2**30:.1f} GB", flush=True)
+                start = time.time()
             if step == total_steps:
                 break
 

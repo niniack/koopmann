@@ -2,7 +2,7 @@
 # TEMP: a 20-minute check of a GPU node (see hpc_check.py). Submit from a login shell: sbatch temp/hpc_check.sh
 #SBATCH -J kae_check
 #SBATCH -p nvidia
-#SBATCH -q ebrainccs
+#SBATCH -q nvidia
 #SBATCH --gres=gpu:a100:1
 #SBATCH -c 32
 #SBATCH --mem=64G

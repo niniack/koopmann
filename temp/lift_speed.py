@@ -30,7 +30,7 @@ def clock(run, device, repeats=20):
 
 @torch.no_grad()
 def main(arms: tuple = ("none", "add", "attend", "mixer"), encoder: str = "ViT-B-32", batches: tuple = (1, 256), cpu: bool = False):
-    device = torch.device("cpu") if cpu else base.get_device()
+    device = torch.device("cpu" if cpu else base.get_device())
     torch.backends.cuda.matmul.allow_tf32 = True
     blocks = base.Teacher(encoder, device).model.visual.transformer.resblocks[base.BLOCKS[0] + 1 :]
     kwargs = dict(width=768, num_patches=49, top_k=256, shared_modes=True, in_features=768, latent_features=2049,

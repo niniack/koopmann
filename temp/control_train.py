@@ -87,18 +87,33 @@ class Teacher:
             model.visual.transformer.resblocks[block].register_forward_hook(lambda _, __, output: self.kept.append(output[0] if isinstance(output, tuple) else output))
 
     @torch.no_grad()
-    def __call__(self, images):
-        """uint8 images [n, 3, 224, 224] -> (states [n, 2, 3 * width], patch tokens after block 6 [n, patches, width])."""
+    def __call__(self, images, ends=False):
+        """
+        uint8 images [n, 3, 224, 224] -> (states [n, 2, 3 * width], patch tokens after block 6 [n, patches, width]).
+        With `ends`, the patch tokens after both blocks: [n, 2, patches, width].
+        """
 
         self.kept.clear()
         self.model.encode_image((images.float() / 255 - self.pixel_mean) / self.pixel_std)
         # NOTE: The summary train.py caches as `cls_patch_std`: CLS token, mean of the patch tokens, their std
         states = [torch.cat([tokens[:, 0], tokens[:, 1:].mean(dim=1), tokens[:, 1:].std(dim=1)], dim=-1) for tokens in self.kept]
 
-        return torch.stack(states, dim=1), self.kept[0][:, 1:]
+        patches = torch.stack([tokens[:, 1:] for tokens in self.kept], dim=1) if ends else self.kept[0][:, 1:]
+
+        return torch.stack(states, dim=1), patches
 
 
 ############# MODEL #############
+
+
+def attend(queries, keys, values, heads):
+    """Multi-head attention of each query over the tokens behind `keys` and `values`: [images, queries, dim]."""
+
+    split = lambda x: x.unflatten(-1, (heads, -1)).transpose(1, 2)
+    # shape: [images, heads, queries, dim / heads]
+    pooled = F.scaled_dot_product_attention(split(queries), split(keys), split(values))
+
+    return pooled.transpose(1, 2).flatten(2)
 
 
 class ControlEncoder(nn.Module):
@@ -120,12 +135,10 @@ class ControlEncoder(nn.Module):
 
     def forward(self, patches):
         tokens = self.embed(self.norm(patches)) + self.positions
-        split = lambda x: x.unflatten(-1, (self.heads, -1)).transpose(1, 2)
-        query = split(self.to_query(self.queries)).expand(len(tokens), -1, -1, -1)
-        # shape: [images, heads, queries, dim / heads]
-        pooled = F.scaled_dot_product_attention(query, split(self.to_key(tokens)), split(self.to_value(tokens)))
+        queries = self.to_query(self.queries).expand(len(tokens), -1, -1)
+        pooled = attend(queries, self.to_key(tokens), self.to_value(tokens), self.heads)
 
-        return self.mlp(pooled.transpose(1, 2).flatten(1))
+        return self.mlp(pooled.flatten(1))
 
 
 class ControlKae(train.JordanKoopmanAutoencoder):
@@ -244,16 +257,19 @@ class Variant:
         )
 
 
-def get_val(teacher, encoder, device, limit=None):
-    """Validation states (train.py's cache), block-6 patch tokens (extracted once, in half precision) and labels."""
+def get_val(teacher, encoder, device, limit=None, ends=False):
+    """
+    Validation states (train.py's cache), block-6 patch tokens (extracted once, in half precision) and labels.
+    With `ends`, the patch tokens of both blocks, in a cache of their own.
+    """
 
     val = torch.load(Path(os.getenv("DATASETS_CACHE")) / "imagenet" / f"clip_cls_patch_std_{encoder}_val_blocks_5_11.pt")
     states, labels = val["states"][:limit].float(), val["labels"][:limit]
 
-    path = HERE / "control_cache" / f"val_patches_{encoder}_{len(states)}.pt"
+    path = HERE / "control_cache" / f"val_patches{'_ends' * ends}_{encoder}_{len(states)}.pt"
     if not path.exists():
         images = Subset(Views("val", teacher, 0), range(len(states)))
-        outputs = [teacher(batch[:, 0].to(device)) for batch, _ in DataLoader(images, batch_size=256, num_workers=16)]
+        outputs = [teacher(batch[:, 0].to(device), ends) for batch, _ in DataLoader(images, batch_size=256, num_workers=16)]
         # NOTE: The online pipeline has to give the cached states back, or its numbers would not compare with the cached runs
         gap = (torch.cat([s.cpu() for s, _ in outputs]) - states).abs().max().item()
         assert gap < 0.05, f"online states differ from the cached ones by up to {gap}"

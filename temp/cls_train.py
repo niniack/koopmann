@@ -14,6 +14,9 @@ Everything is control_train.py's (online crops, real CLIP as teacher, control en
        mul        multiplicative control: z12 = λ·exp(a + i·b)·z6, where the control gives each mode a scale exp(a)
                   and a turn b per image. The control can change how a mode is stepped, and cannot write into z12.
        mul_half   the same, with control on the first 512 pairs only: λ alone steps the other 512, for every image.
+       attend     no control: the encoder reads the patch tokens with the CLS token, through attention (see lift.py),
+                  so z6 = encoder(CLS token, patch tokens) and z12 = λ·z6. The same encoder is used after block 12.
+       mixer      the same, with the token-mixing MLP of an MLP-Mixer block in place of the attention.
   3. Optional penalty on the control (arms `real_w*`): the loss gains `control_weight` times the control's share of z12's
      squared size. Without it the control ends up as over 90% of z12, and λ·z6 as under 10%.
   4. Mixup as in Beyer et al. (arXiv 2106.05237): crops are blended before real CLIP sees them, so the target is real
@@ -40,11 +43,13 @@ from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 
 import control_train as base
+import lift
 from control_train import train
 from koopmann.utils import get_device, set_seed
 
 ARMS = {"none": {"control": "none"}, "add": {"real_start": False}, "add_real": {"real_start": True}, "mlp": None,
         "mul": {"control": "multiply"}, "mul_half": {"control": "multiply", "controlled": 512},
+        "attend": {"reader": "attend", "control": "none"}, "mixer": {"reader": "mixer", "control": "none"},
         "real_w01": {"real_start": True, "control_weight": 0.1}, "real_w03": {"real_start": True, "control_weight": 0.3}, "real_w1": {"real_start": True, "control_weight": 1.0}}  # fmt: skip
 
 
@@ -79,8 +84,11 @@ def get_model(arm, kwargs):
     if ARMS[arm] is None:
         return MlpControl(hidden=kwargs["hidden_config"][0], **{k: v for k, v in kwargs.items() if k not in ("top_k", "shared_modes")})
     settings = {key: value for key, value in ARMS[arm].items() if key != "control_weight"}
+    control = settings.pop("control", "add")
+    if "reader" in settings:
+        return lift.LiftKae(**settings, **kwargs)
 
-    return ShareKae(settings.pop("control", "add"), **kwargs, **settings)
+    return ShareKae(control, **kwargs, **settings)
 
 
 class Arm(base.Variant):
@@ -90,6 +98,7 @@ class Arm(base.Variant):
         self.name = name
         settings = ARMS[arm] or {}
         self.control_weight = settings.get("control_weight", 0.0)
+        self.ends = "reader" in settings
         control = settings.get("control", "add")
         self.model = get_model(arm, kwargs).to(device)
         self.optimizers = train.get_optimizers(self.model, lr, adam_lr, 0.0)
@@ -125,11 +134,16 @@ class Arm(base.Variant):
             "wandb_id": self.run.id,
         }
 
+    def take(self, patches):
+        """The patch tokens this arm reads. NOTE: In a run with a reader they come for both blocks, and a control takes block 6's."""
+
+        return patches if self.ends or patches.ndim == 3 else patches[:, 0]
+
     def train_step(self, states, patches, head):
         """control_train's step, plus the penalty on the control's share."""
 
         self.model.train()
-        self.model.set_control(patches)
+        self.model.set_control(self.take(patches))
         losses = train.compute_losses(self.model, states, 0.5, head)
         loss = sum(weight * value for weight, value in zip(base.LAMBDAS, losses))
         if self.control_weight:
@@ -144,6 +158,7 @@ class Arm(base.Variant):
         self.totals += torch.tensor([value.item() for value in losses])
 
     def report(self, step, steps_done, batch, val, head):
+        batch, val = [(states, self.take(patches), labels) for states, patches, labels in (batch, val)]
         super().report(step, steps_done, batch, val, head)
         if hasattr(self.model, "control_share"):
             self.run.log({"val/control_share": self.model.control_share.item()}, step=step)
@@ -207,13 +222,15 @@ def main(
     stats = torch.load(f"{os.getenv('WEIGHTS_CACHE')}/tokae/{reference}_stats.pt")
     stats = {**stats, "mean": stats["mean"][:width], "std": stats["std"][:width], "tokens": "cls"}
     mean, std = stats["mean"].to(device), stats["std"].to(device)
-    val_states, val_patches, val_labels = base.get_val(teacher, encoder, device, limit=2_048 if smoke else None)
+    # A reader encodes the patch tokens of both blocks
+    ends = any("reader" in (ARMS[arm] or {}) for arm in arms)
+    val_states, val_patches, val_labels = base.get_val(teacher, encoder, device, limit=2_048 if smoke else None, ends=ends)
     val = ((val_states[..., :width] - mean) / std, val_patches, val_labels)
 
     head = train.ClipHead(encoder, mean, std, device, zero_shot=True)
     kwargs = {
         "width": width,
-        "num_patches": val_patches.shape[1],
+        "num_patches": val_patches.shape[-2],
         "top_k": top_k,
         "shared_modes": True,
         "in_features": width,
@@ -237,7 +254,7 @@ def main(
         for images, labels in loader:
             images = images.flatten(0, 1).to(device, non_blocking=True).float()
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=precision == "bf16"):
-                states, patches = teacher(mix(images, views) if mixup else images)
+                states, patches = teacher(mix(images, views) if mixup else images, ends)
             states = (states[..., :width].float() - mean) / std
             for model in models:
                 model.train_step(states, patches, head)

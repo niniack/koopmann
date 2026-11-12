@@ -270,9 +270,11 @@ def get_val(teacher, encoder, device, limit=None, ends=False):
     if not path.exists():
         images = Subset(Views("val", teacher, 0), range(len(states)))
         outputs = [teacher(batch[:, 0].to(device), ends) for batch, _ in DataLoader(images, batch_size=256, num_workers=16)]
-        # NOTE: The online pipeline has to give the cached states back, or its numbers would not compare with the cached runs
-        gap = (torch.cat([s.cpu() for s, _ in outputs]) - states).abs().max().item()
-        assert gap < 0.05, f"online states differ from the cached ones by up to {gap}"
+        # NOTE: The online pipeline has to give the cached states back, or its numbers would not compare with the cached runs.
+        # The cache is from another machine, where the same image gives a state up to 2% away, and another image one far further.
+        gap = (torch.cat([s.cpu() for s, _ in outputs]) - states).norm(dim=-1) / states.norm(dim=-1)
+        print(f"relative gap between the online states and the cached ones: median {gap.median().item():.1e}, largest {gap.max().item():.1e}", flush=True)
+        assert gap.max() < 0.1, "the online states are not the cached ones"
         path.parent.mkdir(exist_ok=True)
         torch.save(torch.cat([p.half().cpu() for _, p in outputs]), path)
 

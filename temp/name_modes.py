@@ -12,6 +12,7 @@ K multiplies a mode's block-6 value z by λ. The prediction λz splits into
 and each gets its own push and its own words.
 
 Usage: name_modes.py <run name> <real_start: 0 or 1> [<vocabulary file>]
+       name_modes.py <weights name of a cls_train.py model>        such as lift_attend_step62500
 """
 
 import csv
@@ -27,40 +28,53 @@ sys.path.insert(0, "/home/nsa325/work/koopmann/scripts/tokae")
 load_dotenv("/home/nsa325/work/koopmann/.env")
 import train  # noqa: E402
 
-name, real_start = sys.argv[1], sys.argv[2] == "1"
+name = sys.argv[1]
 vocabulary = sys.argv[3] if len(sys.argv) > 3 else "clip_vocab.pt"
 torch.set_num_threads(int(os.environ.get("OMP_NUM_THREADS", 6)))
 torch.set_grad_enabled(False)
 torch.manual_seed(0)
 ENCODER, MIN_IMAGES, MOST_IMAGES, TOP_IMAGES = "ViT-B-32", 200, 600, 50
 save_dir = os.getenv("WEIGHTS_CACHE") + "/tokae"
-stats = torch.load(f"{save_dir}/{name}_stats.pt")
-states, labels = train.get_states(ENCODER, "imagenet", "val", "cpu", [5, 11], tokens="cls_patch_std", extract=False)
-states = (states.float() - stats["mean"]) / stats["std"]
-kae = train.JordanKoopmanAutoencoder(
-    256,
-    shared_modes=True,
-    real_start=real_start,
-    in_features=states.shape[-1],
-    latent_features=2049,
-    hidden_config=stats["hidden_config"],
-    bias=True,
-    batchnorm=False,
-    nonlinearity="leaky_relu",
-)
-kae.load_state_dict(load_file(f"{save_dir}/{name}.safetensors"))
-kae.eval()
-head = train.ClipHead(ENCODER, stats["mean"], stats["std"], "cpu", zero_shot=False)
-classes = torch.load("zero_shot_head.pt").float().cpu()
-class_names = open_clip.IMAGENET_CLASSNAMES
-words = torch.load(vocabulary)
-# NOTE: Text embeddings share a large common part; taking it out leaves what tells words apart (as SpLiCE does)
-texts = torch.nn.functional.normalize(words["embeddings"] - words["embeddings"].mean(dim=0), dim=-1)
-words = words["words"]
 
 
 def to_complex(latent):
     return torch.cat([latent[..., :1].to(torch.cfloat), torch.complex(latent[..., 1::2], latent[..., 2::2])], dim=-1)
+
+
+stats = torch.load(f"{save_dir}/{name.partition('_step')[0]}_stats.pt")
+if "arm" in stats:
+    import run_codes
+
+    kae, states, labels, codes, lam = run_codes.get_codes(name)
+    states, z6, device = (states - stats["mean"]) / stats["std"], codes[:, 0], run_codes.device
+else:
+    states, labels = train.get_states(ENCODER, "imagenet", "val", "cpu", [5, 11], tokens="cls_patch_std", extract=False)
+    states = (states.float() - stats["mean"]) / stats["std"]
+    kae = train.JordanKoopmanAutoencoder(
+        256,
+        shared_modes=True,
+        real_start=sys.argv[2] == "1",
+        in_features=states.shape[-1],
+        latent_features=2049,
+        hidden_config=stats["hidden_config"],
+        bias=True,
+        batchnorm=False,
+        nonlinearity="leaky_relu",
+    )
+    kae.load_state_dict(load_file(f"{save_dir}/{name}.safetensors"))
+    kae.eval()
+    z6 = torch.cat([to_complex(train.encode_pairs(kae, part)[:, 0]) for part in states.split(5000)])
+    lam = torch.cat([kae.real_eigenvalue.to(torch.cfloat), torch.complex(kae.block_real, kae.block_imag)])
+    device = "cpu"
+# Everything goes where the model is: the GPU for a model of cls_train.py, if there is one
+states, labels, z6, lam = [value.to(device) for value in (states, labels, z6, lam)]
+head = train.ClipHead(ENCODER, stats["mean"], stats["std"], device, zero_shot=False)
+classes = torch.load("zero_shot_head.pt").float().to(device)
+class_names = open_clip.IMAGENET_CLASSNAMES
+words = torch.load(vocabulary)
+# NOTE: Text embeddings share a large common part; taking it out leaves what tells words apart (as SpLiCE does)
+texts = torch.nn.functional.normalize(words["embeddings"] - words["embeddings"].mean(dim=0), dim=-1).to(device)
+words = words["words"]
 
 
 def embed(latent):
@@ -68,8 +82,6 @@ def embed(latent):
 
 
 ROWS = [slice(first, first + 5000) for first in range(0, len(states), 5000)]
-z6 = torch.cat([to_complex(train.encode_pairs(kae, states[rows])[:, 0]) for rows in ROWS])
-lam = torch.cat([kae.real_eigenvalue.to(torch.cfloat), torch.complex(kae.block_real, kae.block_imag)])
 predicted = lam * z6
 latent = torch.cat([predicted[:, :1].real, torch.stack([predicted[:, 1:].real, predicted[:, 1:].imag], dim=-1).flatten(-2)], dim=-1)
 base = torch.cat([embed(latent[rows]) for rows in ROWS])
@@ -145,7 +157,7 @@ quartiles = torch.tensor([0.25, 0.5, 0.75])
 print("\n25% / median / 75% over modes")
 for key in ["push matches top images", "kept matches top images", "built matches top images", "built against kept", "push size", "kept size", "built size", "top words match"]:
     print(f"  {key:26s}", " / ".join(f"{v:.3f}" for v in column(key).float().quantile(quartiles).tolist()))
-kept_pushes = {key: torch.stack(value) for key, value in kept_pushes.items()}
+kept_pushes = {key: torch.stack(value).cpu() for key, value in kept_pushes.items()}
 torch.save({"table": table, "modes": modes, **kept_pushes}, f"names_{name}.pt")
 # Chance level for the match: a mode's push against the top images of the other modes
 unit = lambda x: torch.nn.functional.normalize(x, dim=-1)

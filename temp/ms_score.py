@@ -19,6 +19,7 @@ same direction (within 60°), right angle, opposite (within 60° of 180°). If t
 the mode's meaning, same-direction pairs look more alike to the judge than opposite pairs.
 
 Usage: ms_score.py dino | ms_score.py <CLIP run name> <real_start: 0 or 1>
+       ms_score.py <weights name of a cls_train.py model>        such as lift_attend_step62500
 """
 
 import os
@@ -42,13 +43,20 @@ save_dir = os.getenv("WEIGHTS_CACHE") + "/tokae"
 if sys.argv[1] == "dino":
     name, encoder, judge, real_start = "im_dino_w21_wd", "dinov3-vitb16", "ViT-B-32", False
 else:
-    name, encoder, judge, real_start = sys.argv[1], "ViT-B-32", "dinov3-vitb16", sys.argv[2] == "1"
-stats = torch.load(f"{save_dir}/{name}_stats.pt")
-raw, labels = train.get_states(encoder, "imagenet", "val", "cpu", [5, 11], tokens="cls_patch_std", extract=False)
-raw = raw.float()
-kae = train.JordanKoopmanAutoencoder(256, shared_modes=True, real_start=real_start, in_features=raw.shape[-1], latent_features=2049, hidden_config=stats["hidden_config"], bias=True, batchnorm=False, nonlinearity="leaky_relu")
-kae.load_state_dict(load_file(f"{save_dir}/{name}.safetensors"))
-kae.eval()
+    name, encoder, judge, real_start = sys.argv[1], "ViT-B-32", "dinov3-vitb16", sys.argv[-1] == "1"
+stats = torch.load(f"{save_dir}/{name.partition('_step')[0]}_stats.pt")
+if "arm" in stats:
+    import run_codes
+
+    _, raw, labels, z, lam = run_codes.get_codes(name)
+else:
+    raw, labels = train.get_states(encoder, "imagenet", "val", "cpu", [5, 11], tokens="cls_patch_std", extract=False)
+    raw = raw.float()
+    kae = train.JordanKoopmanAutoencoder(256, shared_modes=True, real_start=real_start, in_features=raw.shape[-1], latent_features=2049, hidden_config=stats["hidden_config"], bias=True, batchnorm=False, nonlinearity="leaky_relu")
+    kae.load_state_dict(load_file(f"{save_dir}/{name}.safetensors"))
+    kae.eval()
+    z = torch.cat([to_complex(train.encode_pairs(kae, (raw[first : first + 5000] - stats["mean"]) / stats["std"])) for first in range(0, len(raw), 5000)])
+    lam = torch.cat([kae.real_eigenvalue.to(torch.cfloat), torch.complex(kae.block_real, kae.block_imag)])
 
 ############# THE JUDGE #############
 
@@ -74,9 +82,7 @@ def get_score(activations):
 ############# SCORES #############
 
 states = (raw - stats["mean"]) / stats["std"]
-z = torch.cat([to_complex(train.encode_pairs(kae, states[first : first + 5000])) for first in range(0, len(states), 5000)])
 z6, z12 = z[:, 0], z[:, 1]
-lam = torch.cat([kae.real_eigenvalue.to(torch.cfloat), torch.complex(kae.block_real, kae.block_imag)])
 kept = z6 != 0
 usage = kept.float().mean(dim=0)
 modes = ((kept.sum(dim=0) >= MIN_IMAGES) & (usage < 0.99)).nonzero()[:, 0]

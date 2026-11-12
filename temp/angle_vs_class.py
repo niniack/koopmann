@@ -8,6 +8,7 @@ of its block-6 size that the class label explains (0 = no tie, 1 = the class dec
 class, a mode with no tie scores about 0.02.
 
 Usage: angle_vs_class.py dino | angle_vs_class.py <CLIP run name> <real_start: 0 or 1>
+       angle_vs_class.py <weights name of a cls_train.py model>        such as lift_attend_step62500
 """
 
 import os
@@ -35,17 +36,22 @@ else:
     load_dotenv("/home/nsa325/work/koopmann/.env")
     import train
 
-    name, real_start = sys.argv[1], sys.argv[2] == "1"
+    name = sys.argv[1]
     save_dir = os.getenv("WEIGHTS_CACHE") + "/tokae"
-    stats = torch.load(f"{save_dir}/{name}_stats.pt")
-    states, labels = train.get_states("ViT-B-32", "imagenet", "val", "cpu", [5, 11], tokens="cls_patch_std", extract=False)
-    states = (states.float() - stats["mean"]) / stats["std"]
-    kae = train.JordanKoopmanAutoencoder(256, shared_modes=True, real_start=real_start, in_features=states.shape[-1], latent_features=2049, hidden_config=stats["hidden_config"], bias=True, batchnorm=False, nonlinearity="leaky_relu")
-    kae.load_state_dict(load_file(f"{save_dir}/{name}.safetensors"))
-    kae.eval()
-    to_complex = lambda latent: torch.cat([latent[..., :1].to(torch.cfloat), torch.complex(latent[..., 1::2], latent[..., 2::2])], dim=-1)
-    z = torch.cat([to_complex(train.encode_pairs(kae, states[first : first + 5000])) for first in range(0, len(states), 5000)])
-    lam = torch.cat([kae.real_eigenvalue.to(torch.cfloat), torch.complex(kae.block_real, kae.block_imag)])
+    stats = torch.load(f"{save_dir}/{name.partition('_step')[0]}_stats.pt")
+    if "arm" in stats:
+        import run_codes
+
+        _, _, labels, z, lam = run_codes.get_codes(name)
+    else:
+        states, labels = train.get_states("ViT-B-32", "imagenet", "val", "cpu", [5, 11], tokens="cls_patch_std", extract=False)
+        states = (states.float() - stats["mean"]) / stats["std"]
+        kae = train.JordanKoopmanAutoencoder(256, shared_modes=True, real_start=sys.argv[2] == "1", in_features=states.shape[-1], latent_features=2049, hidden_config=stats["hidden_config"], bias=True, batchnorm=False, nonlinearity="leaky_relu")
+        kae.load_state_dict(load_file(f"{save_dir}/{name}.safetensors"))
+        kae.eval()
+        to_complex = lambda latent: torch.cat([latent[..., :1].to(torch.cfloat), torch.complex(latent[..., 1::2], latent[..., 2::2])], dim=-1)
+        z = torch.cat([to_complex(train.encode_pairs(kae, states[first : first + 5000])) for first in range(0, len(states), 5000)])
+        lam = torch.cat([kae.real_eigenvalue.to(torch.cfloat), torch.complex(kae.block_real, kae.block_imag)])
 
 
 def get_class_tie(values):

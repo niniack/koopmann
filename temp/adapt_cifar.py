@@ -65,7 +65,7 @@ def tune(log_probs, inputs, labels, knobs, tuned):
     """Fits the tuned rows of `knobs` (the other rows stay 0) to the labels, full batch."""
 
     knobs.requires_grad_(True)
-    mask = torch.tensor(tuned).float()[:, None]
+    mask = torch.tensor(tuned, device=knobs.device).float()[:, None]
     optimizer = torch.optim.Adam([knobs], lr=LR)
     with torch.enable_grad():
         for _ in range(STEPS):

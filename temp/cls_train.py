@@ -69,23 +69,30 @@ class MlpControl(train.MlpKoopmanAutoencoder):
         return super().koopman_forward(observable, 1) + self.signal.view(observable.shape)
 
 
+def get_model(arm, kwargs):
+    """The untrained model of an arm."""
+
+    if ARMS[arm] is None:
+        return MlpControl(hidden=kwargs["hidden_config"][0], **{k: v for k, v in kwargs.items() if k not in ("top_k", "shared_modes")})
+    settings = {key: value for key, value in ARMS[arm].items() if key != "control_weight"}
+
+    return ShareKae(settings.pop("control", "add"), **kwargs, **settings)
+
+
 class Arm(base.Variant):
     """One model in training. The construction, the penalty and the resuming differ from control_train's Variant."""
 
     def __init__(self, name, arm, config, kwargs, stats, total_steps, lr, adam_lr, device, offline, saved):
         self.name = name
-        settings = dict(ARMS[arm] or {})
-        self.control_weight = settings.pop("control_weight", 0.0)
-        control = settings.pop("control", "add")
-        if ARMS[arm] is None:
-            self.model = MlpControl(hidden=kwargs["hidden_config"][0], **{k: v for k, v in kwargs.items() if k not in ("top_k", "shared_modes")}).to(device)
-        else:
-            self.model = ShareKae(control, **kwargs, **settings).to(device)
+        settings = ARMS[arm] or {}
+        self.control_weight = settings.get("control_weight", 0.0)
+        control = settings.get("control", "add")
+        self.model = get_model(arm, kwargs).to(device)
         self.optimizers = train.get_optimizers(self.model, lr, adam_lr, 0.0)
         self.schedulers = [LambdaLR(opt, lambda step: 1 - step / total_steps) for opt in self.optimizers]
         self.totals, self.best = torch.zeros(len(base.LAMBDAS)), -1.0
         self.path = Path(os.getenv("WEIGHTS_CACHE")) / "tokae" / f"{name}.safetensors"
-        torch.save({**stats, "arm": arm, "control": control, **(ARMS[arm] or {})}, self.path.with_name(f"{name}_stats.pt"))
+        torch.save({**stats, "arm": arm, "control": control, **settings}, self.path.with_name(f"{name}_stats.pt"))
         if saved:
             self.model.load_state_dict(saved["model"])
             # NOTE: Loaded after the schedulers are built: a new scheduler sets the optimizer's rate back to its start

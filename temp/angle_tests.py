@@ -21,25 +21,26 @@ import torch
 from safetensors.torch import load_file
 
 import control_train as base
+from cls_train import get_model
 from control_train import train
 
 torch.set_grad_enabled(False)
 torch.manual_seed(0)
 device = base.get_device()
+rate = lambda a, b: 100 * (a == b).float().mean().item()
 to_complex = lambda latent: torch.cat([latent[..., :1].to(torch.cfloat), torch.complex(latent[..., 1::2], latent[..., 2::2])], dim=-1)
 to_latent = lambda z: torch.cat([z[..., :1].real, torch.view_as_real(z[..., 1:]).flatten(-2)], dim=-1)
 
 
-def load_kae(name):
-    """A trained CLS-only KAE with additive control, and its run's stats."""
+def load_kae(name, weights=None):
+    """A trained model of cls_train.py (any arm) and its run's stats. `weights` names another file of the run, such as a saved step."""
 
     folder = Path(os.getenv("WEIGHTS_CACHE")) / "tokae"
     stats = torch.load(folder / f"{name}_stats.pt")
-    kae = base.ControlKae(
-        "add", width=768, num_patches=49, top_k=256, shared_modes=True, real_start=stats["real_start"], in_features=768, latent_features=2049,
-        hidden_config=stats["hidden_config"], bias=True, batchnorm=False, nonlinearity="leaky_relu",
-    )  # fmt: skip
-    kae.load_state_dict(load_file(folder / f"{name}.safetensors"))
+    kwargs = dict(width=768, num_patches=49, top_k=256, shared_modes=True, in_features=768, latent_features=2049,
+                  hidden_config=stats["hidden_config"], bias=True, batchnorm=False, nonlinearity="leaky_relu")  # fmt: skip
+    kae = get_model(stats["arm"], kwargs)
+    kae.load_state_dict(load_file(folder / f"{weights or name}.safetensors"))
     return kae.to(device).eval(), stats
 
 
@@ -48,17 +49,21 @@ def classify(kae, head, latent):
 
 
 def ablate(kae, head, z6, labels, clip):
-    """Test 1."""
+    """Test 1. Returns each row's answers. NOTE: A KAE with no control has no control rows."""
 
     a, b, signal = kae.block_real.data.clone(), kae.block_imag.data.clone(), kae.signal
     size = torch.complex(a, b).abs()
-    own = classify(kae, head, kae.koopman_forward(z6, 1))
     rows = {"as trained": (a, b, signal), "angle dropped (|λ|)": (size, 0 * b, signal), "size dropped (λ/|λ|)": (a / size, b / size, signal),
-            "both dropped (λ = 1)": (1 + 0 * a, 0 * b, signal), "λ = 0 (control only)": (0 * a, 0 * b, signal), "control dropped": (a, b, 0 * signal)}  # fmt: skip
+            "both dropped (λ = 1)": (1 + 0 * a, 0 * b, signal)}  # fmt: skip
+    if signal is not None:
+        rows |= {"λ = 0 (control only)": (0 * a, 0 * b, signal), "control dropped": (a, b, 0 * signal)}
+    answers = {}
     for row, (kae.block_real.data, kae.block_imag.data, kae.signal) in rows.items():
-        answers = classify(kae, head, kae.koopman_forward(z6, 1))
-        print(f"  {row:24s} accuracy {100 * (answers == labels).float().mean():5.2f} | same as real CLIP {100 * (answers == clip).float().mean():5.2f} | same as the KAE as trained {100 * (answers == own).float().mean():5.2f}")
+        answers[row] = classify(kae, head, kae.koopman_forward(z6, 1))
+        print(f"  {row:24s} accuracy {rate(answers[row], labels):5.2f} | same as real CLIP {rate(answers[row], clip):5.2f} | same as the KAE as trained {rate(answers[row], answers['as trained']):5.2f}")
     kae.block_real.data, kae.block_imag.data, kae.signal = a, b, signal
+
+    return answers
 
 
 def swap(kae, head, z12):

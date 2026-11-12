@@ -6,6 +6,8 @@ TEMP: the fixed test of a run of cls_train.py, on each arm's best weights and on
    to the set's own 200 classes, as is usual.
 2. For the KAE arms, on ImageNet validation: the eigenvalue ablation of angle_tests.py, the number of modes in use and
    of modes that are on for 99% of images, the median size and angle of λ, and the control's share of z12.
+3. On every set: the answers when an image gets the CLS token of another image, and when it gets the control's average
+   over the set in place of its own control. They show what the model takes from each of its two inputs.
 The rows go to a CSV in this folder, which is written anew on every call.
 
 Usage: baseline_eval.py --files="base_*"
@@ -80,6 +82,19 @@ def get_spectrum(kae, z6):
     }
 
 
+def swap_inputs(model, head, z6):
+    """Answers with one input made uninformative: the CLS token of the image half the set away, and the set's average control."""
+
+    signal = model.signal
+    answers = {"CLS of another image": tests.classify(model, head, model.koopman_forward(z6.roll(len(z6) // 2, dims=0), 1))}
+    if signal is not None:
+        model.signal = signal.mean(dim=0, keepdim=True).expand_as(signal)
+        answers["control averaged"] = tests.classify(model, head, model.koopman_forward(z6, 1))
+        model.signal = signal
+
+    return answers
+
+
 def main(files: str = "base_*", out: str = "baseline_eval.csv"):
     """Tests every weights file whose name matches `files`: `<run>_<arm>` (best) and `<run>_<arm>_step<N>`."""
 
@@ -108,6 +123,10 @@ def main(files: str = "base_*", out: str = "baseline_eval.csv"):
                 spectrum = get_spectrum(model, z6)
                 print("  " + ", ".join(f"{key} {value:.2f}" for key, value in spectrum.items()))
                 answers = tests.ablate(model, head, z6, labels, clip)
+
+            swapped = swap_inputs(model, head, z6)
+            print("  " + ", ".join(f"{row}: accuracy {tests.rate(given, labels):.2f}" for row, given in swapped.items()), flush=True)
+            answers |= swapped
 
             for variant, given in answers.items():
                 scores = {"accuracy": tests.rate(given, labels), "same_as_clip": tests.rate(given, clip), "same_as_trained": tests.rate(given, answers["as trained"])}

@@ -36,11 +36,12 @@ def extract_snow(path):
     photos = sorted((Path(os.getenv("DATASETS_CACHE")) / "snowy_imagenet").glob("*/*.jpg"))
     states, patches = teacher(torch.stack([preprocess(Image.open(photo)) for photo in photos]).to(device))
 
-    # NOTE: The labels are those of the states extracted earlier, so the photos have to come in the same order
+    # NOTE: The labels are those of the states extracted earlier, so the photos have to come in the same order.
+    # The same photo differs by up to 2% between the two machines, and two different photos by far more.
     earlier = torch.load(base.HERE / "snowy_clip_states.pt")
     gap = ((states.cpu() - earlier["states"]).norm(dim=-1) / earlier["states"].norm(dim=-1)).max().item()
     print(f"largest relative gap between the snowy states and the earlier ones: {gap:.1e}")
-    assert gap < 1e-2, "the snowy photos are not the earlier ones, or not in their order"
+    assert gap < 0.1, "the snowy photos are not the earlier ones, or not in their order"
     torch.save({"states": states.cpu(), "patches": patches.half().cpu(), "labels": earlier["labels"]}, path)
 
 

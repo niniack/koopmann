@@ -12,6 +12,9 @@ reads from the 49 patch tokens. The encoder's first layer is widened to take the
     mixer    the token-mixing MLP of one MLP-Mixer block (Tolstikhin et al., arXiv 2105.01601) over slots and patch tokens
 In both, the encoder's own MLP follows directly, as the MLP of a transformer block or the channel-mixing MLP of a Mixer block does.
 
+With `reader_layers` above 1 (arm `attend_deep`), the attention reader reads again: each further layer queries the patch
+tokens with what the slots have read so far, then runs an MLP on the slots (a Perceiver block, Jaegle et al., arXiv 2103.03206).
+
 With `linear_decoder` (arms `linear` and `linear_real`) the decoder is one matrix and a bias in place of its MLP. A mode then
 writes the same two directions of the CLS token after both blocks, so the change from block 6 to block 12 is the decoder's
 matrix times (λ - 1)·z6: the MLP decoder can no longer turn a rescaled z6 into another state.
@@ -47,15 +50,40 @@ class Reader(nn.Module):
 
 
 class AttendReader(Reader):
-    """Each slot is a query of one cross-attention layer over the patch tokens (control_train's attention)."""
+    """
+    Each slot is a query of one cross-attention layer over the patch tokens (control_train's attention).
+    NOTE: With `layers` above 1, the further layers are in `more`, so a one-layer reader keeps its weight names.
+    """
 
-    def __init__(self, width, num_patches, heads=8):
+    def __init__(self, width, num_patches, heads=8, layers=1):
         super().__init__(width, num_patches)
         self.heads = heads
         self.to_query, self.to_key, self.to_value = nn.Linear(self.dim, self.dim), nn.Linear(self.dim, self.dim), nn.Linear(self.dim, self.dim)
+        self.more = nn.ModuleList([ReadAgain(self.dim, heads) for _ in range(layers - 1)])
 
     def read(self, slots, tokens):
-        return base.attend(self.to_query(slots), self.to_key(tokens), self.to_value(tokens), self.heads)
+        read = base.attend(self.to_query(slots), self.to_key(tokens), self.to_value(tokens), self.heads)
+        for layer in self.more:
+            read = read + layer(slots + read, tokens)
+
+        return read
+
+
+class ReadAgain(nn.Module):
+    """One further layer of the attention reader: the slots query the patch tokens again, then an MLP runs on each slot."""
+
+    def __init__(self, dim, heads, hidden=1_024):
+        super().__init__()
+        self.heads = heads
+        self.norm, self.mlp_norm = nn.LayerNorm(dim), nn.LayerNorm(dim)
+        self.to_query, self.to_key, self.to_value = nn.Linear(dim, dim), nn.Linear(dim, dim), nn.Linear(dim, dim)
+        self.mlp = nn.Sequential(nn.Linear(dim, hidden), nn.GELU(), nn.Linear(hidden, dim))
+
+    def forward(self, slots, tokens):
+        query = self.to_query(self.norm(slots))
+        read = base.attend(query, self.to_key(tokens), self.to_value(tokens), self.heads)
+
+        return read + self.mlp(self.mlp_norm(slots + read))
 
 
 class MixerReader(Reader):
@@ -65,8 +93,9 @@ class MixerReader(Reader):
     NOTE: A Mixer block also updates the patch tokens. Nothing reads them after this one block, so only the slots are computed.
     """
 
-    def __init__(self, width, num_patches, hidden=384):
+    def __init__(self, width, num_patches, hidden=384, layers=1):
         super().__init__(width, num_patches)
+        assert layers == 1, "the mixer reader has one layer"
         self.mix_norm = nn.LayerNorm(self.dim)
         self.mix = nn.Sequential(nn.Linear(self.slots + num_patches, hidden), nn.GELU(), nn.Linear(hidden, self.slots))
 
@@ -89,9 +118,9 @@ class LiftKae(train.JordanKoopmanAutoencoder):
 
     signal = None  # No control. angle_tests.ablate reads this.
 
-    def __init__(self, reader, width, num_patches, linear_decoder=False, **kwargs):
+    def __init__(self, reader, width, num_patches, linear_decoder=False, reader_layers=1, **kwargs):
         super().__init__(**kwargs)
-        self.reader = READERS[reader](width, num_patches)
+        self.reader = READERS[reader](width, num_patches, layers=reader_layers)
         # The encoder's first layer, widened to take the CLS token and the slots
         first = LinearLayer(width + self.reader.out_features, self.hidden_config[0], self.bias, self.batchnorm, self.nonlinearity)
         first.apply(LinearLayer.init_weights)

@@ -19,6 +19,9 @@ Everything is control_train.py's (online crops, real CLIP as teacher, control en
        mixer      the same, with the token-mixing MLP of an MLP-Mixer block in place of the attention.
        linear     `attend` with a linear decoder (one matrix and a bias), so the change between the blocks goes through λ.
        linear_real  the same with the real-start rule.
+       attend_recon3  `attend` with the reconstruction loss weighted 3 in place of 1.
+       attend_k512    `attend` with 256 modes kept per image in place of 128 (TopK 512).
+       attend_deep    `attend` with a reader of 3 layers in place of 1 (see lift.py).
   3. Optional penalty on the control (arms `real_w*`): the loss gains `control_weight` times the control's share of z12's
      squared size. Without it the control ends up as over 90% of z12, and λ·z6 as under 10%.
   4. Mixup as in Beyer et al. (arXiv 2106.05237): crops are blended before real CLIP sees them, so the target is real
@@ -54,6 +57,8 @@ ARMS = {"none": {"control": "none"}, "add": {"real_start": False}, "add_real": {
         "attend": {"reader": "attend", "control": "none"}, "mixer": {"reader": "mixer", "control": "none"},
         "linear": {"reader": "attend", "control": "none", "linear_decoder": True},
         "linear_real": {"reader": "attend", "control": "none", "linear_decoder": True, "real_start": True},
+        "attend_recon3": {"reader": "attend", "control": "none", "recon_weight": 3.0}, "attend_k512": {"reader": "attend", "control": "none", "top_k": 512},
+        "attend_deep": {"reader": "attend", "control": "none", "reader_layers": 3},
         "real_w01": {"real_start": True, "control_weight": 0.1}, "real_w03": {"real_start": True, "control_weight": 0.3}, "real_w1": {"real_start": True, "control_weight": 1.0}}  # fmt: skip
 
 
@@ -87,8 +92,9 @@ def get_model(arm, kwargs):
 
     if ARMS[arm] is None:
         return MlpControl(hidden=kwargs["hidden_config"][0], **{k: v for k, v in kwargs.items() if k not in ("top_k", "shared_modes")})
-    settings = {key: value for key, value in ARMS[arm].items() if key != "control_weight"}
+    settings = {key: value for key, value in ARMS[arm].items() if key not in ("control_weight", "recon_weight")}
     control = settings.pop("control", "add")
+    kwargs = {**kwargs, "top_k": settings.pop("top_k", kwargs["top_k"])}
     if "reader" in settings:
         return lift.LiftKae(**settings, **kwargs)
 
@@ -102,6 +108,7 @@ class Arm(base.Variant):
         self.name = name
         settings = ARMS[arm] or {}
         self.control_weight = settings.get("control_weight", 0.0)
+        self.weights = (settings.get("recon_weight", base.LAMBDAS[0]), *base.LAMBDAS[1:])  # NOTE: The first loss is the reconstruction
         self.ends = "reader" in settings
         control = settings.get("control", "add")
         self.model = get_model(arm, kwargs).to(device)
@@ -149,7 +156,7 @@ class Arm(base.Variant):
         self.model.train()
         self.model.set_control(self.take(patches))
         losses = train.compute_losses(self.model, states, 0.5, head)
-        loss = sum(weight * value for weight, value in zip(base.LAMBDAS, losses))
+        loss = sum(weight * value for weight, value in zip(self.weights, losses))
         if self.control_weight:
             loss = loss + self.control_weight * self.model.control_share
 

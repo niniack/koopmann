@@ -6,7 +6,7 @@
 #SBATCH -q nvidia
 #SBATCH --gres=gpu:a100:1
 #SBATCH -c 4
-#SBATCH --mem=24G
+#SBATCH --mem=12G
 #SBATCH -t 0:45:00
 #SBATCH -o /home/nsa325/work/koopmann/logs/%x_%j.out
 

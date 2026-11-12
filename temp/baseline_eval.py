@@ -38,8 +38,9 @@ def extract_snow(path):
 
     # NOTE: The labels are those of the states extracted earlier, so the photos have to come in the same order
     earlier = torch.load(base.HERE / "snowy_clip_states.pt")
-    gap = (states.cpu() - earlier["states"]).abs().max().item()
-    assert gap < 0.05, f"the snowy states differ from the earlier ones by up to {gap}"
+    gap = ((states.cpu() - earlier["states"]).norm(dim=-1) / earlier["states"].norm(dim=-1)).max().item()
+    print(f"largest relative gap between the snowy states and the earlier ones: {gap:.1e}")
+    assert gap < 1e-2, "the snowy photos are not the earlier ones, or not in their order"
     torch.save({"states": states.cpu(), "patches": patches.half().cpu(), "labels": earlier["labels"]}, path)
 
 

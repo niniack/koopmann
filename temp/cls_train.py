@@ -17,6 +17,8 @@ Everything is control_train.py's (online crops, real CLIP as teacher, control en
        attend     no control: the encoder reads the patch tokens with the CLS token, through attention (see lift.py),
                   so z6 = encoder(CLS token, patch tokens) and z12 = λ·z6. The same encoder is used after block 12.
        mixer      the same, with the token-mixing MLP of an MLP-Mixer block in place of the attention.
+       linear     `attend` with a linear decoder (one matrix and a bias), so the change between the blocks goes through λ.
+       linear_real  the same with the real-start rule.
   3. Optional penalty on the control (arms `real_w*`): the loss gains `control_weight` times the control's share of z12's
      squared size. Without it the control ends up as over 90% of z12, and λ·z6 as under 10%.
   4. Mixup as in Beyer et al. (arXiv 2106.05237): crops are blended before real CLIP sees them, so the target is real
@@ -50,6 +52,8 @@ from koopmann.utils import get_device, set_seed
 ARMS = {"none": {"control": "none"}, "add": {"real_start": False}, "add_real": {"real_start": True}, "mlp": None,
         "mul": {"control": "multiply"}, "mul_half": {"control": "multiply", "controlled": 512},
         "attend": {"reader": "attend", "control": "none"}, "mixer": {"reader": "mixer", "control": "none"},
+        "linear": {"reader": "attend", "control": "none", "linear_decoder": True},
+        "linear_real": {"reader": "attend", "control": "none", "linear_decoder": True, "real_start": True},
         "real_w01": {"real_start": True, "control_weight": 0.1}, "real_w03": {"real_start": True, "control_weight": 0.3}, "real_w1": {"real_start": True, "control_weight": 1.0}}  # fmt: skip
 
 
@@ -190,6 +194,7 @@ def main(
     encoder: str = "ViT-B-32",
     reference: str = "im_iso_2x4k",
     total_steps: int = 30_000,
+    stop_at: int = 0,
     report_every: int = 2_500,
     snapshot_every: int = 12_500,
     batch_size: int = 1_024,
@@ -209,6 +214,8 @@ def main(
     """
     Trains the arms on the same stream of fresh crops. `smoke` is a short code check, with wandb offline.
     NOTE: 2,500 steps of 512 images are one pass over ImageNet, so the defaults report every epoch and keep every fifth.
+    NOTE: `stop_at` ends the run at that step, with the learning rates of a run of `total_steps`. It is then the start
+    of the long run, and the same command without `stop_at` carries on.
     """
 
     config = dict(locals())
@@ -250,7 +257,8 @@ def main(
 
     loader = DataLoader(base.Views("train", teacher, views), batch_size // views, shuffle=True, drop_last=True, num_workers=workers, persistent_workers=True, pin_memory=True)
     start = time.time()
-    while step < total_steps:
+    last = stop_at or total_steps
+    while step < last:
         for images, labels in loader:
             images = images.flatten(0, 1).to(device, non_blocking=True).float()
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=precision == "bf16"):
@@ -260,16 +268,16 @@ def main(
                 model.train_step(states, patches, head)
             step += 1
 
-            if step % report_every == 0 or step == total_steps:
+            if step % report_every == 0 or step == last:
                 batch = (states, patches, labels.repeat_interleave(views).to(device))
                 for model in models:
                     model.report(step, report_every, batch, val, head)
-                    if step % snapshot_every == 0 or step == total_steps:
+                    if step % snapshot_every == 0 or step == last:
                         save_file(model.model.state_dict(), model.path.with_name(f"{model.name}_step{step}.safetensors"))
                 save(models, step, latest)
                 print(f"step {step} | {(time.time() - start) / report_every:.3f} s per step, GPU memory {torch.cuda.max_memory_allocated() / 2**30:.1f} GB", flush=True)
                 start = time.time()
-            if step == total_steps:
+            if step == last:
                 break
 
     for model in models:

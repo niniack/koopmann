@@ -11,6 +11,10 @@ reads from the 49 patch tokens. The encoder's first layer is widened to take the
     attend   one cross-attention layer: each slot is a query over the patch tokens
     mixer    the token-mixing MLP of one MLP-Mixer block (Tolstikhin et al., arXiv 2105.01601) over slots and patch tokens
 In both, the encoder's own MLP follows directly, as the MLP of a transformer block or the channel-mixing MLP of a Mixer block does.
+
+With `linear_decoder` (arms `linear` and `linear_real`) the decoder is one matrix and a bias in place of its MLP. A mode then
+writes the same two directions of the CLS token after both blocks, so the change from block 6 to block 12 is the decoder's
+matrix times (λ - 1)·z6: the MLP decoder can no longer turn a rescaled z6 into another state.
 """
 
 import torch
@@ -85,13 +89,15 @@ class LiftKae(train.JordanKoopmanAutoencoder):
 
     signal = None  # No control. angle_tests.ablate reads this.
 
-    def __init__(self, reader, width, num_patches, **kwargs):
+    def __init__(self, reader, width, num_patches, linear_decoder=False, **kwargs):
         super().__init__(**kwargs)
         self.reader = READERS[reader](width, num_patches)
         # The encoder's first layer, widened to take the CLS token and the slots
         first = LinearLayer(width + self.reader.out_features, self.hidden_config[0], self.bias, self.batchnorm, self.nonlinearity)
         first.apply(LinearLayer.init_weights)
         self.components.encoder.encoder_0 = first
+        if linear_decoder:
+            self.components.decoder = self._build_decoder([(self.in_features, self.latent_features)])
 
     def set_control(self, patches):
         """Patch tokens [images, patches, width], or [images, 2, patches, width] for start and end states encoded as pairs."""

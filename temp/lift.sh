@@ -4,14 +4,14 @@
 # 0.39 s per step are about 27 hours.
 # NOTE: Its own run name, as `<name>_latest.pt` is one file per run name.
 # If the time limit cuts it short, submit it again: it carries on from the last report.
-# NOTE: 40 GB as in the baseline: with 20 GB the job is killed for memory in its first minutes (the 28 loader workers).
+# NOTE: 56 GB. With 40 GB (the baseline's) the job was killed for memory after 62,500 steps, while it saved its resume point.
 # Submit from a login shell: sbatch temp/lift.sh
 #SBATCH -J kae_lift
 #SBATCH -p nvidia
 #SBATCH -q nvidia
 #SBATCH --gres=gpu:a100:1
 #SBATCH -c 30
-#SBATCH --mem=40G
+#SBATCH --mem=56G
 #SBATCH -t 1-08:00:00
 #SBATCH --requeue
 #SBATCH --open-mode=append

@@ -11,6 +11,9 @@ Everything is control_train.py's (online crops, real CLIP as teacher, control en
        add_real   the same with the real-start rule: at block 6 a mode is one real number (size only, no phase)
        mlp        baseline, not a KAE: no TopK and an MLP in place of the eigenvalues (train.MlpKoopmanAutoencoder),
                   with the same control added. It shows what the eigenvalue step and the sparsity cost in accuracy.
+       mul        multiplicative control: z12 = λ·exp(a + i·b)·z6, where the control gives each mode a scale exp(a)
+                  and a turn b per image. The control can change how a mode is stepped, and cannot write into z12.
+       mul_half   the same, with control on the first 512 pairs only: λ alone steps the other 512, for every image.
   3. Optional penalty on the control (arms `real_w*`): the loss gains `control_weight` times the control's share of z12's
      squared size. Without it the control ends up as over 90% of z12, and λ·z6 as under 10%.
   4. Mixup as in Beyer et al. (arXiv 2106.05237): crops are blended before real CLIP sees them, so the target is real
@@ -41,6 +44,7 @@ from control_train import train
 from koopmann.utils import get_device, set_seed
 
 ARMS = {"none": {"control": "none"}, "add": {"real_start": False}, "add_real": {"real_start": True}, "mlp": None,
+        "mul": {"control": "multiply"}, "mul_half": {"control": "multiply", "controlled": 512},
         "real_w01": {"real_start": True, "control_weight": 0.1}, "real_w03": {"real_start": True, "control_weight": 0.3}, "real_w1": {"real_start": True, "control_weight": 1.0}}  # fmt: skip
 
 

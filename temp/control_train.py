@@ -10,6 +10,7 @@ optimizers):
    driving the CLS token through attention in blocks 7-12. Here they enter as a control input, as in Koopman with control:
        add       z12 = λ·z6 + gate·B·u      (u = control vector from the block-6 patch tokens; gate = the modes TopK kept)
        bilinear  z12 = (λ + δ(u))·z6        (the control shifts each mode's eigenvalue, in size and angle, per image)
+       multiply  z12 = λ·exp(a(u) + i·b(u))·z6   (the control scales each mode's eigenvalue by exp(a) and turns it by b)
        none      z12 = λ·z6                 (the plain KAE)
    u comes from one cross-attention pooling layer over the patch tokens (a few learned queries), then an MLP whose last
    layer starts at zero, so every variant starts as the plain KAE.
@@ -134,9 +135,10 @@ class ControlKae(train.JordanKoopmanAutoencoder):
     This keeps train.py's losses and evaluation usable as they are.
     """
 
-    def __init__(self, control, width, num_patches, **kwargs):
+    def __init__(self, control, width, num_patches, controlled=None, **kwargs):
         super().__init__(**kwargs)
         self.control = control
+        self.controlled = controlled
         self.signal = None
         if control != "none":
             self.control_encoder = ControlEncoder(width, num_patches, self.latent_features)
@@ -144,6 +146,9 @@ class ControlKae(train.JordanKoopmanAutoencoder):
     def set_control(self, patches, chunk=4_096):
         if self.control != "none":
             self.signal = torch.cat([self.control_encoder(part.float()) for part in patches.split(chunk)])
+            if self.controlled:
+                # Only the real coordinate and the first `controlled` pairs get control. λ alone steps the other modes.
+                self.signal = self.signal * (torch.arange(self.signal.shape[1], device=self.signal.device) < 1 + 2 * self.controlled)
 
     def koopman_forward(self, observable, k_steps):
         assert k_steps == 1, "the control is defined for the single step from start to end"
@@ -154,6 +159,13 @@ class ControlKae(train.JordanKoopmanAutoencoder):
         signal = self.signal.view(observable.shape)
         real, blocks = observable[..., :1], observable[..., 1:].unflatten(-1, (-1, 2))
         signal_real, signal_blocks = signal[..., :1], signal[..., 1:].unflatten(-1, (-1, 2))
+        if self.control == "multiply":
+            # The signal is a log-scale a and a turn b of each mode's eigenvalue: exp(a + ib)·(x + iy), with x + iy = λ·z6.
+            # A mode that is off at the start stays off, and with a zero signal the step is λ alone.
+            x, y = out[..., 1:].unflatten(-1, (-1, 2)).unbind(dim=-1)
+            c, d = signal_blocks[..., 0].exp() * signal_blocks[..., 1].cos(), signal_blocks[..., 0].exp() * signal_blocks[..., 1].sin()
+            return torch.cat([signal_real.exp() * out[..., :1], torch.stack([c * x - d * y, d * x + c * y], dim=-1).flatten(-2)], dim=-1)
+
         if self.control == "add":
             # Only the modes TopK kept at the start receive control, so the end keeps the start's modes
             kept = (blocks != 0).any(dim=-1, keepdim=True)
